@@ -79,7 +79,7 @@ if uploaded_file is not None:
 
         # ---------- HuggingFace Embeddings ----------
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            model_name="sentence-transformers/all-mpnet-base-v2"
         )
 
         vectorstore = SimpleVectorStore(embeddings)
@@ -100,7 +100,7 @@ if st.session_state.vectorstore is not None:
     if user_question:
         with st.spinner("Thinking..."):
             try:
-                docs = st.session_state.vectorstore.similarity_search(user_question, k=5)
+                docs = st.session_state.vectorstore.similarity_search(user_question, k=12)
                 if not docs:
                     st.warning("No relevant passages found. Try rephrasing your question.")
                 else:
