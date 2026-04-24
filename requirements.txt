@@ -11,3 +11,4 @@ matplotlib>=3.7
 plotly>=5.17
 pandas>=2.0
 requests>=2.31
+Pillow>=9.0
