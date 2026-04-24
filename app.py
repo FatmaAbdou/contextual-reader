@@ -147,16 +147,29 @@ if "summary_cache" not in st.session_state:
     st.session_state.summary_cache = {}
 if "cover_url_temp" not in st.session_state:
     st.session_state.cover_url_temp = ""
+if "imported" not in st.session_state:
+    st.session_state.imported = False
 
 # ---------- Sidebar ----------
 with st.sidebar:
     st.markdown("## 📖 Contextual Reader")
     st.markdown("---")
+    
     st.subheader("📸 Book Cover (for current upload)")
     cover_img = st.file_uploader("Upload cover image", type=["jpg","jpeg","png"], key="cover_upload")
     cover_url = st.text_input("Or paste cover image URL", placeholder="https://...", key="cover_url_input")
-    if cover_url:
+    
+    if cover_img:
+        st.image(cover_img, width=150, caption="Cover preview")
+        st.session_state.cover_img_temp = cover_img
+    elif cover_url:
+        st.image(cover_url, width=150, caption="Cover preview")
         st.session_state.cover_url_temp = cover_url
+    else:
+        st.caption("No cover selected")
+    
+    st.markdown("---")
+    
     if st.button("🗑️ Clear current book"):
         st.session_state.vectorstore = None
         st.session_state.book_stats = None
@@ -170,6 +183,7 @@ with st.sidebar:
         st.session_state.word_definitions = {}
         st.session_state.quiz_questions = []
         st.rerun()
+    
     if st.button("📤 Export library (JSON)"):
         lib = load_library()
         if lib:
@@ -177,21 +191,21 @@ with st.sidebar:
             st.download_button("Download library", json_str, "book_library.json", "application/json")
         else:
             st.info("No library to export.")
+    
     uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
-    if uploaded_lib and "imported" not in st.session_state:
+    if uploaded_lib and not st.session_state.imported:
         try:
             new_lib = json.load(uploaded_lib)
             if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
                 save_library(new_lib)
                 st.session_state.imported = True
-                st.success("Library imported! Refresh to see changes.")
-                st.rerun()
+                st.success("Library imported! Please refresh the page to see changes.")
             else:
                 st.error("Invalid JSON structure. Expected a list of book objects.")
         except Exception as e:
             st.error(f"Invalid JSON file: {e}")
-    if "imported" in st.session_state and not uploaded_lib:
-        del st.session_state.imported
+    if not uploaded_lib and st.session_state.imported:
+        st.session_state.imported = False
 
 # ---------- Main area ----------
 st.title("📚 Contextual Reader")
@@ -209,7 +223,6 @@ if uploaded_file is not None:
             full_text = " ".join([d.page_content for d in documents])
             st.session_state.full_text = full_text
 
-            # Collect chunks with page numbers
             chunks_meta = []
             for doc in documents:
                 splits = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100).split_text(doc.page_content)
@@ -226,9 +239,7 @@ if uploaded_file is not None:
             st.session_state.vectorstore = vectorstore
             st.session_state.current_filename = uploaded_file.name
 
-            # Stats
             words = re.findall(r'\b[a-zA-Z]+\b', full_text.lower())
-            # Remove pure numbers and non-alphabetic tokens
             words = [w for w in words if w.isalpha()]
             unique_words = set(words)
             sentences = nltk.sent_tokenize(full_text)
@@ -244,12 +255,10 @@ if uploaded_file is not None:
             }
             st.session_state.book_stats = stats
 
-            # Extract rare words (frequency 1-3, alphabetic, not stopwords)
             freq = Counter(words)
             rare = {w: c for w, c in freq.items() if w.isalpha() and w not in stop_words and 1 <= c <= 3}
             st.session_state.rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
 
-            # Cover image (file or URL)
             cover_b64 = None
             cover_url_saved = None
             if cover_img:
@@ -273,7 +282,7 @@ if st.session_state.vectorstore is not None:
         st.stop()
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
 
-    tabs = st.tabs(["💬 Ask", "📊 Dashboard", "📌 Saved Q&A", "📖 Vocabulary", "🧠 Quiz", "📚 Reading Tracker", "✍️ Summarize", "💾 Saved Summaries & Quizzes"])
+    tabs = st.tabs(["💬 Ask", "📊 Dashboard", "📌 Saved Q&A", "📖 Vocabulary", "🧠 Quiz", "📚 Library", "✍️ Summarize", "💾 Saved Summaries & Quizzes"])
 
     # ---------- TAB 1: Ask ----------
     with tabs[0]:
@@ -313,7 +322,7 @@ if st.session_state.vectorstore is not None:
                 for i, d in enumerate(st.session_state.last_context_docs):
                     st.caption(f"Source {i+1}: {d.page_content[:500]}...")
 
-    # ---------- TAB 2: Dashboard ----------
+    # ---------- TAB 2: Dashboard (current book) ----------
     with tabs[1]:
         st.header("Current Book Dashboard")
         if st.session_state.book_stats:
@@ -336,7 +345,7 @@ if st.session_state.vectorstore is not None:
                 fig = px.bar(x=list(counts.keys()), y=list(counts.values()), color_discrete_sequence=["#4a6fa5"])
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No book loaded.")
+            st.info("No book loaded. Upload a PDF to see dashboard.")
 
     # ---------- TAB 3: Saved Q&A ----------
     with tabs[2]:
@@ -377,7 +386,7 @@ if st.session_state.vectorstore is not None:
 
         st.markdown("---")
         st.subheader("Look up any word")
-        custom_word = st.text_input("Enter any word (not necessarily from the book)", value=st.session_state.custom_word_lookup, key="custom_word_input")
+        custom_word = st.text_input("Enter any word", value=st.session_state.custom_word_lookup, key="custom_word_input")
         if st.button("Get definition"):
             if custom_word:
                 st.session_state.custom_word_lookup = custom_word
@@ -425,15 +434,14 @@ if st.session_state.vectorstore is not None:
             st.download_button("Download CSV with definitions", csv, "vocabulary_with_definitions.csv", "text/csv")
             st.success("Export ready!")
 
-    # ---------- TAB 5: Quiz (randomized chunks) ----------
+    # ---------- TAB 5: Quiz ----------
     with tabs[4]:
         st.header("AI‑Generated Quiz")
         col1, col2 = st.columns([2,1])
         with col1:
             if st.button("🎲 Generate new quiz (5 questions)"):
-                with st.spinner("Generating quiz... (calls Gemini API)"):
+                with st.spinner("Generating quiz..."):
                     try:
-                        # Randomly sample up to 20 chunks from the vector store
                         total_chunks = len(st.session_state.vectorstore.chunks)
                         sample_size = min(20, total_chunks)
                         random_indices = random.sample(range(total_chunks), sample_size)
@@ -450,7 +458,7 @@ Text:
                         if start != -1 and end != -1:
                             json_str = text[start:end]
                             st.session_state.quiz_questions = json.loads(json_str)
-                            st.success("Quiz generated! Select answers below (no reruns until submit).")
+                            st.success("Quiz generated!")
                         else:
                             st.error("Could not parse quiz. Try again.")
                     except Exception as e:
@@ -487,49 +495,77 @@ Text:
         else:
             st.info("Click 'Generate new quiz' to start.")
 
-    # ---------- TAB 6: Reading Tracker ----------
+    # ---------- TAB 6: Library (all books) ----------
     with tabs[5]:
-        st.header("Reading Tracker")
+        st.header("📚 Your Library")
         library = load_library()
         if not library:
             st.info("No books in library. Upload a PDF to add it.")
         else:
-            for book in library:
+            # Overview metrics
+            total_books = len(library)
+            total_words = sum(b.get("word_count", 0) for b in library)
+            finished_books = sum(1 for b in library if b.get("status") == "finished")
+            reading_books = sum(1 for b in library if b.get("status") == "reading")
+            completion_rate = (finished_books / total_books * 100) if total_books else 0
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("📚 Total books", total_books)
+            col2.metric("📝 Total words", f"{total_words:,}")
+            col3.metric("✅ Finished", finished_books)
+            col4.metric("📖 Reading now", reading_books)
+            st.progress(completion_rate / 100, text=f"Completion rate: {completion_rate:.1f}%")
+            
+            st.markdown("---")
+            
+            # Sort options
+            sort_by = st.selectbox("Sort by", ["Upload date (newest first)", "Word count (descending)", "Title (A-Z)", "Status", "Progress"])
+            if sort_by == "Upload date (newest first)":
+                library.sort(key=lambda x: x.get("upload_date", ""), reverse=True)
+            elif sort_by == "Word count (descending)":
+                library.sort(key=lambda x: x.get("word_count", 0), reverse=True)
+            elif sort_by == "Title (A-Z)":
+                library.sort(key=lambda x: x.get("filename", "").lower())
+            elif sort_by == "Status":
+                library.sort(key=lambda x: x.get("status", ""))
+            elif sort_by == "Progress":
+                library.sort(key=lambda x: x.get("progress", 0), reverse=True)
+            
+            # Display each book in a card-like layout
+            for idx, book in enumerate(library):
                 with st.container():
-                    col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
-                    with col1:
+                    cols = st.columns([1, 3, 2, 1])
+                    with cols[0]:
                         if book.get("cover_b64"):
-                            st.image(base64.b64decode(book["cover_b64"]), width=80)
+                            st.image(base64.b64decode(book["cover_b64"]), width=100)
                         elif book.get("cover_url"):
-                            st.image(book["cover_url"], width=80)
+                            st.image(book["cover_url"], width=100)
                         else:
-                            st.image("https://via.placeholder.com/80x120?text=No+Cover", width=80)
-                    with col2:
-                        st.write(f"**{book['filename']}**")
+                            st.image("https://via.placeholder.com/100x150?text=No+Cover", width=100)
+                    with cols[1]:
+                        st.markdown(f"**{book['filename']}**")
                         st.caption(f"Uploaded: {book['upload_date']}")
-                        st.caption(f"Words: {book['word_count']:,}")
-                    with col3:
-                        status = st.selectbox("Status", ["unread", "reading", "finished"], key=f"status_{book['filename']}", index=["unread","reading","finished"].index(book.get("status","unread")))
-                        progress = st.number_input("Progress (pages)", min_value=0, max_value=1000, value=book.get("progress",0), key=f"progress_{book['filename']}")
-                        if st.button("Update", key=f"update_{book['filename']}"):
-                            success = update_book_status(book['filename'], status, progress)
-                            if success:
-                                st.success(f"Updated {book['filename']}: {status}, {progress} pages")
+                        st.caption(f"Words: {book['word_count']:,} | Pages: {book.get('progress', 0)} read")
+                    with cols[2]:
+                        status_options = ["unread", "reading", "finished"]
+                        status_idx = status_options.index(book.get("status", "unread"))
+                        new_status = st.selectbox("Status", status_options, index=status_idx, key=f"status_{idx}_{book['filename']}", label_visibility="collapsed")
+                        new_progress = st.number_input("Pages read", min_value=0, max_value=1000, value=book.get("progress", 0), key=f"progress_{idx}_{book['filename']}", label_visibility="collapsed")
+                        if st.button("Update", key=f"update_{idx}_{book['filename']}"):
+                            if update_book_status(book['filename'], new_status, new_progress):
+                                st.success(f"Updated '{book['filename']}'")
                                 st.rerun()
-                            else:
-                                st.error("Update failed.")
-                    with col4:
-                        if st.button("Delete", key=f"del_{book['filename']}"):
+                    with cols[3]:
+                        if st.button("Delete", key=f"del_{idx}_{book['filename']}"):
                             delete_book_from_library(book['filename'])
                             st.rerun()
-                st.divider()
+                    st.divider()
 
-    # ---------- TAB 7: Summarize (with save buttons) ----------
+    # ---------- TAB 7: Summarize ----------
     with tabs[6]:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
         
-        # Summarize from book by page range
         if st.session_state.chunks_metadata:
             pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
             min_page = min(pages) if pages else 1
@@ -553,9 +589,9 @@ Text:
                                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "source": f"Pages {page_range[0]}-{page_range[1]}"
                             })
-                            st.toast("Summary saved!", icon="✅")
+                            st.toast("Saved!", icon="✅")
                     else:
-                        with st.spinner("Generating summary... (calls Gemini API)"):
+                        with st.spinner("Generating summary..."):
                             try:
                                 prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
                                 response = llm.invoke(prompt)
@@ -569,16 +605,15 @@ Text:
                                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         "source": f"Pages {page_range[0]}-{page_range[1]}"
                                     })
-                                    st.toast("Summary saved!", icon="✅")
+                                    st.toast("Saved!", icon="✅")
                             except Exception as e:
                                 st.error(f"Error: {e}")
                 else:
                     st.warning("No text in that page range.")
         
         st.markdown("---")
-        # Custom text summarization
         st.subheader("Or paste your own text")
-        manual_text = st.text_area("Paste a paragraph, article excerpt, or any text", height=200)
+        manual_text = st.text_area("Paste text to summarize", height=200)
         if st.button("Summarize custom text") and manual_text:
             hash_key = hashlib.md5(manual_text.encode()).hexdigest()
             if hash_key in st.session_state.summary_cache:
@@ -591,9 +626,9 @@ Text:
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "source": "Custom text"
                     })
-                    st.toast("Summary saved!", icon="✅")
+                    st.toast("Saved!", icon="✅")
             else:
-                with st.spinner("Generating summary... (calls Gemini API)"):
+                with st.spinner("Generating summary..."):
                     try:
                         prompt = f"Summarize the following text concisely:\n\n{manual_text[:8000]}"
                         response = llm.invoke(prompt)
@@ -607,7 +642,7 @@ Text:
                                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "source": "Custom text"
                             })
-                            st.toast("Summary saved!", icon="✅")
+                            st.toast("Saved!", icon="✅")
                     except Exception as e:
                         st.error(f"Error: {e}")
 
