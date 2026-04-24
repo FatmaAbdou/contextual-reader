@@ -5,31 +5,31 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load local .env file (for development)
 load_dotenv()
 
-# ---------- Helper to get API key from secrets (cloud) or env (local) ----------
 def get_api_key():
+    """Get API key from st.secrets (Streamlit Cloud) or environment variable (local)."""
     try:
+        # Try Streamlit Cloud secrets
         return st.secrets["GOOGLE_API_KEY"]
     except (FileNotFoundError, KeyError, AttributeError):
+        # Fall back to environment variable for local development
         return os.getenv("GOOGLE_API_KEY")
 
 api_key = get_api_key()
 if not api_key:
-    st.error("❌ GOOGLE_API_KEY missing. Add to .env (local) or Streamlit secrets.")
+    st.error("❌ GOOGLE_API_KEY not found. Please add it to .env (local) or Secrets (Streamlit Cloud).")
     st.stop()
 
-# ---------- Retry decorator for LLM calls ----------
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1.5, min=4, max=15)
-)
-def invoke_llm_with_retry(llm, prompt):
-    return llm.invoke(prompt)
-# ---------- Simple in‑memory vector store ----------
+# Page configuration
+st.set_page_config(page_title="Contextual Reader", page_icon="📚", layout="wide")
+
+st.title("📚 Contextual Reader")
+st.markdown("Upload any PDF and ask questions about it.")
+
+# Simple in‑memory vector store using numpy
 class SimpleVectorStore:
     def __init__(self, embeddings_model):
         self.embeddings_model = embeddings_model
@@ -49,25 +49,23 @@ class SimpleVectorStore:
         top_indices = np.argsort(similarities)[-k:][::-1]
         return [self.chunks[i] for i in top_indices]
 
-# ---------- Streamlit UI ----------
-st.set_page_config(page_title="Contextual Reader", page_icon="📚", layout="wide")
-st.title("📚 Contextual Reader")
-st.markdown("Upload any PDF and ask questions about it.")
-
+# Sidebar status
 with st.sidebar:
     st.header("Status")
     st.success("✅ Google API key loaded")
 
+# Initialize session state
 if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 
+# File uploader
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
 if uploaded_file is not None:
     with open("temp.pdf", "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    with st.spinner("Processing PDF... (may take a few minutes)"):
+    with st.spinner("Processing PDF... (this may take a few minutes for a long book)"):
         loader = PyPDFLoader("temp.pdf")
         documents = loader.load()
 
@@ -79,7 +77,7 @@ if uploaded_file is not None:
         chunks = text_splitter.split_documents(documents)
         st.info(f"Split into {len(chunks)} text chunks")
 
-        # ✅ FIXED: use the new embedding model name
+        # Use the stable embedding model
         embeddings = GoogleGenerativeAIEmbeddings(
             model="gemini-embedding-001",
             google_api_key=api_key
@@ -90,23 +88,28 @@ if uploaded_file is not None:
         st.session_state.vectorstore = vectorstore
 
         os.remove("temp.pdf")
-        st.success("✅ PDF processed! Ready for questions.")
+        st.success("✅ PDF processed! You can now ask questions.")
 
+# Question answering interface
 if st.session_state.vectorstore is not None:
     st.header("Ask about your document")
+
+    # Use a stable chat model (gemini-2.5-flash has separate free tier)
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",   # works with your free tier
+        model="gemini-2.5-flash",
         temperature=0.3,
         google_api_key=api_key
     )
 
-    user_question = st.text_input("Your question:", placeholder="e.g., What is the main theme?")
+    user_question = st.text_input("Your question:", placeholder="e.g., What is the main theme of chapter 2?")
+
     if user_question:
         with st.spinner("Thinking..."):
-            docs = st.session_state.vectorstore.similarity_search(user_question, k=5)
-            context = "\n\n".join([doc.page_content for doc in docs])
+            try:
+                docs = st.session_state.vectorstore.similarity_search(user_question, k=5)
+                context = "\n\n".join([doc.page_content for doc in docs])
 
-            prompt = f"""Answer the question based only on the following context from the book. If the answer is not in the context, say "I don't have enough information."
+                prompt = f"""Answer the question based only on the following context from the book. If the answer is not in the context, say "I don't have enough information from the uploaded book."
 
 Context:
 {context}
@@ -115,13 +118,16 @@ Question: {user_question}
 
 Answer:"""
 
-            response = invoke_llm_with_retry(llm, prompt)
-            st.markdown("### Answer")
-            st.write(response.content)
+                response = llm.invoke(prompt)
+                st.markdown("### Answer")
+                st.write(response.content)
 
-            with st.expander("📖 See relevant passages"):
-                for i, doc in enumerate(docs):
-                    st.markdown(f"**Source {i+1}:**")
-                    st.write(doc.page_content[:500] + ("..." if len(doc.page_content) > 500 else ""))
+                with st.expander("📖 See relevant passages from the book"):
+                    for i, doc in enumerate(docs):
+                        st.markdown(f"**Source {i+1}:**")
+                        st.write(doc.page_content[:500] + ("..." if len(doc.page_content) > 500 else ""))
+
+            except Exception as e:
+                st.error(f"An error occurred while generating the answer: {e}")
 else:
-    st.info("👈 Upload a PDF to get started.")
+    st.info("👈 Upload a PDF to begin.")
