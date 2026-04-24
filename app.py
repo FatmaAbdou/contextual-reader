@@ -19,6 +19,16 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import plotly.express as px
 from PIL import Image
+from nltk.stem import WordNetLemmatizer
+
+# Download NLTK lemmatizer data
+@st.cache_resource
+def download_nltk_lemmatizer():
+    nltk.download('wordnet', quiet=True)
+    nltk.download('omw-1.4', quiet=True)
+    return WordNetLemmatizer()
+
+lemmatizer = download_nltk_lemmatizer()
 
 # ---------- Page config ----------
 st.set_page_config(page_title="Contextual Reader", page_icon="📚", layout="wide")
@@ -93,6 +103,22 @@ def delete_book_from_library(filename):
     library = load_library()
     library = [b for b in library if b["filename"] != filename]
     save_library(library)
+
+def get_definition(word):
+    """Get definition using lemmatizer to find base form."""
+    base_word = lemmatizer.lemmatize(word.lower())
+    # Try original word first, then base word
+    for attempt in [word.lower(), base_word]:
+        try:
+            url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{attempt}"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                definition = data[0]['meanings'][0]['definitions'][0]['definition']
+                return definition
+        except:
+            continue
+    return None  # Not found
 
 # ---------- Vector store ----------
 class SimpleVectorStore:
@@ -247,8 +273,8 @@ if uploaded_file is not None:
             st.session_state.vectorstore = vectorstore
             st.session_state.current_filename = uploaded_file.name
 
-            words = re.findall(r'\b[a-zA-Z]+\b', full_text.lower())
-            words = [w for w in words if w.isalpha()]
+            # Word statistics
+            words = re.findall(r'\b[a-zA-Z]{2,}\b', full_text.lower())
             unique_words = set(words)
             sentences = nltk.sent_tokenize(full_text)
             avg_sentence_len = np.mean([len(w.split()) for w in sentences]) if sentences else 0
@@ -263,8 +289,9 @@ if uploaded_file is not None:
             }
             st.session_state.book_stats = stats
 
+            # Rare words: frequency 1-3, not stopwords, length >= 3
             freq = Counter(words)
-            rare = {w: c for w, c in freq.items() if w.isalpha() and w not in stop_words and 1 <= c <= 3}
+            rare = {w: c for w, c in freq.items() if w not in stop_words and 1 <= c <= 3 and len(w) >= 3}
             st.session_state.rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
 
             cover_b64 = None
@@ -373,21 +400,15 @@ if st.session_state.vectorstore is not None:
         if st.session_state.rare_words:
             rare_df = pd.DataFrame(st.session_state.rare_words, columns=["Word", "Frequency"])
             st.dataframe(rare_df, use_container_width=True)
-            selected_word = st.selectbox("Or select a rare word to see its definition", [w for w, _ in st.session_state.rare_words])
+            selected_word = st.selectbox("Select a rare word to see its definition", [w for w, _ in st.session_state.rare_words])
             if selected_word:
                 if selected_word not in st.session_state.word_definitions:
-                    with st.spinner("Fetching definition..."):
-                        try:
-                            url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{selected_word}"
-                            resp = requests.get(url)
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                definition = data[0]['meanings'][0]['definitions'][0]['definition']
-                                st.session_state.word_definitions[selected_word] = definition
-                            else:
-                                st.session_state.word_definitions[selected_word] = "Definition not found in free dictionary."
-                        except:
-                            st.session_state.word_definitions[selected_word] = "Could not fetch definition."
+                    with st.spinner("Looking up definition..."):
+                        defn = get_definition(selected_word)
+                        if defn:
+                            st.session_state.word_definitions[selected_word] = defn
+                        else:
+                            st.session_state.word_definitions[selected_word] = "Definition not found in dictionary."
                 st.success(f"**{selected_word}**: {st.session_state.word_definitions[selected_word]}")
         else:
             st.info("No rare words found in this book.")
@@ -399,18 +420,12 @@ if st.session_state.vectorstore is not None:
             if custom_word:
                 st.session_state.custom_word_lookup = custom_word
                 if custom_word not in st.session_state.word_definitions:
-                    with st.spinner("Fetching definition..."):
-                        try:
-                            url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{custom_word}"
-                            resp = requests.get(url)
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                definition = data[0]['meanings'][0]['definitions'][0]['definition']
-                                st.session_state.word_definitions[custom_word] = definition
-                            else:
-                                st.session_state.word_definitions[custom_word] = "Definition not found in free dictionary."
-                        except:
-                            st.session_state.word_definitions[custom_word] = "Could not fetch definition."
+                    with st.spinner("Looking up definition..."):
+                        defn = get_definition(custom_word)
+                        if defn:
+                            st.session_state.word_definitions[custom_word] = defn
+                        else:
+                            st.session_state.word_definitions[custom_word] = "Definition not found in dictionary."
                 st.success(f"**{custom_word}**: {st.session_state.word_definitions[custom_word]}")
             else:
                 st.warning("Please enter a word.")
@@ -421,17 +436,8 @@ if st.session_state.vectorstore is not None:
             export_data = []
             for word, freq in st.session_state.rare_words:
                 if word not in st.session_state.word_definitions:
-                    try:
-                        url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
-                        resp = requests.get(url)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            definition = data[0]['meanings'][0]['definitions'][0]['definition']
-                            st.session_state.word_definitions[word] = definition
-                        else:
-                            st.session_state.word_definitions[word] = "Definition not found."
-                    except:
-                        st.session_state.word_definitions[word] = "Error fetching definition."
+                    defn = get_definition(word)
+                    st.session_state.word_definitions[word] = defn if defn else "Definition not found."
                 export_data.append({
                     "Word": word,
                     "Frequency": freq,
@@ -448,27 +454,30 @@ if st.session_state.vectorstore is not None:
         col1, col2 = st.columns([2,1])
         with col1:
             if st.button("🎲 Generate new quiz (5 questions)"):
-                with st.spinner("Generating quiz..."):
+                with st.spinner("Generating quiz... (calls Gemini API)"):
                     try:
                         total_chunks = len(st.session_state.vectorstore.chunks)
-                        sample_size = min(20, total_chunks)
-                        random_indices = random.sample(range(total_chunks), sample_size)
-                        sample_chunks = [st.session_state.vectorstore.chunks[i].page_content for i in random_indices]
-                        context = "\n\n".join(sample_chunks)
-                        prompt = f"""Generate 5 multiple-choice questions based on the following text. Return a JSON list with each question containing: "question", "options" (list of 4 strings), "correct" (0-based index of correct option). Example: [{{"question": "What is X?", "options": ["A", "B", "C", "D"], "correct": 1}}]
+                        if total_chunks == 0:
+                            st.error("No text chunks available.")
+                        else:
+                            sample_size = min(20, total_chunks)
+                            random_indices = random.sample(range(total_chunks), sample_size)
+                            sample_chunks = [st.session_state.vectorstore.chunks[i].page_content for i in random_indices]
+                            context = "\n\n".join(sample_chunks)[:8000]
+                            prompt = f"""Generate 5 multiple-choice questions based on the following text. Return a JSON list with each question containing: "question", "options" (list of 4 strings), "correct" (0-based index of correct option). Example: [{{"question": "What is X?", "options": ["A", "B", "C", "D"], "correct": 1}}]
 
 Text:
-{context[:8000]}"""
-                        response = llm.invoke(prompt)
-                        text = response.content
-                        start = text.find('[')
-                        end = text.rfind(']')+1
-                        if start != -1 and end != -1:
-                            json_str = text[start:end]
-                            st.session_state.quiz_questions = json.loads(json_str)
-                            st.success("Quiz generated!")
-                        else:
-                            st.error("Could not parse quiz. Try again.")
+{context}"""
+                            response = llm.invoke(prompt)
+                            text = response.content
+                            start = text.find('[')
+                            end = text.rfind(']')+1
+                            if start != -1 and end != -1:
+                                json_str = text[start:end]
+                                st.session_state.quiz_questions = json.loads(json_str)
+                                st.success("Quiz generated!")
+                            else:
+                                st.error("Could not parse quiz. Try again.")
                     except Exception as e:
                         st.error(f"Error: {e}")
         with col2:
@@ -516,13 +525,12 @@ Text:
             reading_books = sum(1 for b in library if b.get("status") == "reading")
             completion_rate = (finished_books / total_books * 100) if total_books else 0
             
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("📚 Total books", total_books)
-            col2.metric("📝 Total words", f"{total_words:,}")
-            col3.metric("✅ Finished", finished_books)
-            col4.metric("📖 Reading now", reading_books)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("📚 Total books", total_books)
+            c2.metric("📝 Total words", f"{total_words:,}")
+            c3.metric("✅ Finished", finished_books)
+            c4.metric("📖 Reading now", reading_books)
             st.progress(completion_rate / 100, text=f"Completion rate: {completion_rate:.1f}%")
-            
             st.markdown("---")
             
             sort_by = st.selectbox("Sort by", ["Upload date (newest first)", "Word count (descending)", "Title (A-Z)", "Status", "Progress"])
@@ -542,7 +550,10 @@ Text:
                     cols = st.columns([1, 3, 2, 1])
                     with cols[0]:
                         if book.get("cover_b64"):
-                            st.image(base64.b64decode(book["cover_b64"]), width=100)
+                            try:
+                                st.image(base64.b64decode(book["cover_b64"]), width=100)
+                            except:
+                                st.image("https://via.placeholder.com/100x150?text=Error", width=100)
                         elif book.get("cover_url"):
                             st.image(book["cover_url"], width=100)
                         else:
@@ -555,7 +566,7 @@ Text:
                         status_options = ["unread", "reading", "finished"]
                         status_idx = status_options.index(book.get("status", "unread"))
                         new_status = st.selectbox("Status", status_options, index=status_idx, key=f"status_{idx}_{book['filename']}", label_visibility="collapsed")
-                        new_progress = st.number_input("Pages read", min_value=0, max_value=1000, value=book.get("progress", 0), key=f"progress_{idx}_{book['filename']}", label_visibility="collapsed")
+                        new_progress = st.number_input("Pages read", min_value=0, max_value=10000, value=book.get("progress", 0), key=f"progress_{idx}_{book['filename']}", label_visibility="collapsed")
                         if st.button("Update", key=f"update_{idx}_{book['filename']}"):
                             if update_book_status(book['filename'], new_status, new_progress):
                                 st.success(f"Updated '{book['filename']}'")
@@ -571,6 +582,7 @@ Text:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
         
+        # Summarize from book by page range
         if st.session_state.chunks_metadata:
             pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
             min_page = min(pages) if pages else 1
