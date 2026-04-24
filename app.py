@@ -4,7 +4,7 @@ import numpy as np
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI,ChatGoogleGenerativeAIError 
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load local .env file (for development)
@@ -25,9 +25,10 @@ if not api_key:
 # ---------- Retry decorator for LLM calls ----------
 @retry(
     stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1.5, min=4, max=15),
-    retry=retry_if_exception_type(Exception)   # or simply remove the retry= argument
+    wait=wait_exponential(multiplier=1.5, min=4, max=15)
 )
+def invoke_llm_with_retry(llm, prompt):
+    return llm.invoke(prompt)
 # ---------- Simple in‑memory vector store ----------
 class SimpleVectorStore:
     def __init__(self, embeddings_model):
