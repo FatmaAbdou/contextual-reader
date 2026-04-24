@@ -177,25 +177,22 @@ with st.sidebar:
             st.download_button("Download library", json_str, "book_library.json", "application/json")
         else:
             st.info("No library to export.")
-   uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
-if uploaded_lib and "imported" not in st.session_state:
-    try:
-        new_lib = json.load(uploaded_lib)
-        # Basic validation: ensure it's a list of dicts with required fields
-        if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
-            save_library(new_lib)
-            st.session_state.imported = True
-            st.success("Library imported! Refresh to see changes.")
-            st.rerun()
-        else:
-            st.error("Invalid JSON structure. Expected a list of book objects.")
-    except Exception as e:
-        st.error(f"Invalid JSON file: {e}")
-# Clear the import flag after rerun (so next upload works)
-if "imported" in st.session_state and not uploaded_lib:
-    del st.session_state.imported
+    uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
+    if uploaded_lib and "imported" not in st.session_state:
+        try:
+            new_lib = json.load(uploaded_lib)
+            if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
+                save_library(new_lib)
+                st.session_state.imported = True
+                st.success("Library imported! Refresh to see changes.")
+                st.rerun()
+            else:
+                st.error("Invalid JSON structure. Expected a list of book objects.")
+        except Exception as e:
+            st.error(f"Invalid JSON file: {e}")
+    if "imported" in st.session_state and not uploaded_lib:
+        del st.session_state.imported
 
-    
 # ---------- Main area ----------
 st.title("📚 Contextual Reader")
 st.markdown("*Your personal AI reading companion*")
