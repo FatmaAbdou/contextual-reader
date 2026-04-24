@@ -21,47 +21,28 @@ st.set_page_config(page_title="Contextual Reader", page_icon="📚", layout="wid
 # ---------- Custom CSS for better UI ----------
 st.markdown("""
 <style>
-    /* Main background */
+    /* Make main content area background slightly off-white */
     .stApp {
-        background: linear-gradient(135deg, #f5f7fa 0%, #e9edf2 100%);
+        background-color: #f8f9fa;
     }
-    /* Card style for metric boxes */
+    /* Metric cards */
     div[data-testid="stMetricValue"] {
         background: white;
-        padding: 15px;
-        border-radius: 15px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        text-align: center;
+        padding: 10px;
+        border-radius: 10px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    /* Tabs styling */
+    /* Tabs styling (safer) */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: #ffffffcc;
-        border-radius: 30px;
-        padding: 5px;
-        backdrop-filter: blur(4px);
+        gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 30px;
-        padding: 8px 20px;
-        font-weight: 500;
+        border-radius: 20px;
+        padding: 6px 16px;
     }
     .stTabs [aria-selected="true"] {
         background-color: #4a6fa5;
         color: white;
-    }
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background: rgba(255,255,255,0.9);
-        border-right: 1px solid #ddd;
-    }
-    /* Headers */
-    h1, h2, h3 {
-        font-family: 'Segoe UI', Roboto, sans-serif;
-    }
-    /* Info boxes */
-    .stAlert {
-        border-radius: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
