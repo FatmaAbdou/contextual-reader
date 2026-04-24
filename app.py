@@ -157,14 +157,16 @@ with st.sidebar:
     
     st.subheader("📸 Book Cover (for current upload)")
     cover_img = st.file_uploader("Upload cover image", type=["jpg","jpeg","png"], key="cover_upload")
-    cover_url = st.text_input("Or paste cover image URL", placeholder="https://...", key="cover_url_input")
+    cover_url = st.text_input("Or paste cover image URL", placeholder="https://...", key="cover_url_input", value="")
     
     if cover_img:
         st.image(cover_img, width=150, caption="Cover preview")
         st.session_state.cover_img_temp = cover_img
+        st.session_state.cover_url_temp = None
     elif cover_url:
         st.image(cover_url, width=150, caption="Cover preview")
         st.session_state.cover_url_temp = cover_url
+        st.session_state.cover_img_temp = None
     else:
         st.caption("No cover selected")
     
@@ -192,6 +194,11 @@ with st.sidebar:
         else:
             st.info("No library to export.")
     
+    if st.button("🗑️ Clear entire library"):
+        save_library([])
+        st.success("All books removed from library.")
+        st.rerun()
+    
     uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
     if uploaded_lib and not st.session_state.imported:
         try:
@@ -199,7 +206,8 @@ with st.sidebar:
             if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
                 save_library(new_lib)
                 st.session_state.imported = True
-                st.success("Library imported! Please refresh the page to see changes.")
+                st.success("Library imported! Refreshing...")
+                st.rerun()
             else:
                 st.error("Invalid JSON structure. Expected a list of book objects.")
         except Exception as e:
@@ -322,7 +330,7 @@ if st.session_state.vectorstore is not None:
                 for i, d in enumerate(st.session_state.last_context_docs):
                     st.caption(f"Source {i+1}: {d.page_content[:500]}...")
 
-    # ---------- TAB 2: Dashboard (current book) ----------
+    # ---------- TAB 2: Dashboard ----------
     with tabs[1]:
         st.header("Current Book Dashboard")
         if st.session_state.book_stats:
@@ -377,9 +385,9 @@ if st.session_state.vectorstore is not None:
                                 definition = data[0]['meanings'][0]['definitions'][0]['definition']
                                 st.session_state.word_definitions[selected_word] = definition
                             else:
-                                st.session_state.word_definitions[selected_word] = "Definition not found."
+                                st.session_state.word_definitions[selected_word] = "Definition not found in free dictionary."
                         except:
-                            st.session_state.word_definitions[selected_word] = "Error fetching definition."
+                            st.session_state.word_definitions[selected_word] = "Could not fetch definition."
                 st.success(f"**{selected_word}**: {st.session_state.word_definitions[selected_word]}")
         else:
             st.info("No rare words found in this book.")
@@ -400,9 +408,9 @@ if st.session_state.vectorstore is not None:
                                 definition = data[0]['meanings'][0]['definitions'][0]['definition']
                                 st.session_state.word_definitions[custom_word] = definition
                             else:
-                                st.session_state.word_definitions[custom_word] = "Definition not found."
+                                st.session_state.word_definitions[custom_word] = "Definition not found in free dictionary."
                         except:
-                            st.session_state.word_definitions[custom_word] = "Error fetching definition."
+                            st.session_state.word_definitions[custom_word] = "Could not fetch definition."
                 st.success(f"**{custom_word}**: {st.session_state.word_definitions[custom_word]}")
             else:
                 st.warning("Please enter a word.")
@@ -431,7 +439,7 @@ if st.session_state.vectorstore is not None:
                 })
             export_df = pd.DataFrame(export_data)
             csv = export_df.to_csv(index=False).encode('utf-8')
-            st.download_button("Download CSV with definitions", csv, "vocabulary_with_definitions.csv", "text/csv")
+            st.download_button("Download CSV", csv, "vocabulary_with_definitions.csv", "text/csv")
             st.success("Export ready!")
 
     # ---------- TAB 5: Quiz ----------
@@ -495,14 +503,13 @@ Text:
         else:
             st.info("Click 'Generate new quiz' to start.")
 
-    # ---------- TAB 6: Library (all books) ----------
+    # ---------- TAB 6: Library ----------
     with tabs[5]:
         st.header("📚 Your Library")
         library = load_library()
         if not library:
             st.info("No books in library. Upload a PDF to add it.")
         else:
-            # Overview metrics
             total_books = len(library)
             total_words = sum(b.get("word_count", 0) for b in library)
             finished_books = sum(1 for b in library if b.get("status") == "finished")
@@ -518,7 +525,6 @@ Text:
             
             st.markdown("---")
             
-            # Sort options
             sort_by = st.selectbox("Sort by", ["Upload date (newest first)", "Word count (descending)", "Title (A-Z)", "Status", "Progress"])
             if sort_by == "Upload date (newest first)":
                 library.sort(key=lambda x: x.get("upload_date", ""), reverse=True)
@@ -531,7 +537,6 @@ Text:
             elif sort_by == "Progress":
                 library.sort(key=lambda x: x.get("progress", 0), reverse=True)
             
-            # Display each book in a card-like layout
             for idx, book in enumerate(library):
                 with st.container():
                     cols = st.columns([1, 3, 2, 1])
@@ -545,7 +550,7 @@ Text:
                     with cols[1]:
                         st.markdown(f"**{book['filename']}**")
                         st.caption(f"Uploaded: {book['upload_date']}")
-                        st.caption(f"Words: {book['word_count']:,} | Pages: {book.get('progress', 0)} read")
+                        st.caption(f"Words: {book['word_count']:,} | Pages read: {book.get('progress', 0)}")
                     with cols[2]:
                         status_options = ["unread", "reading", "finished"]
                         status_idx = status_options.index(book.get("status", "unread"))
