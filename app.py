@@ -25,12 +25,11 @@ if not api_key:
 # ---------- Retry decorator for LLM calls ----------
 @retry(
     stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1.5, min=4, max=15),
-    retry=retry_if_exception_type(Exception)   # catches rate limits & temp failures
+    wait=wait_exponential(multiplier=2, min=10, max=60),
+    retry=retry_if_exception_type(ChatGoogleGenerativeAIError)
 )
 def invoke_llm_with_retry(llm, prompt):
     return llm.invoke(prompt)
-
 # ---------- Simple in‑memory vector store ----------
 class SimpleVectorStore:
     def __init__(self, embeddings_model):
@@ -97,7 +96,7 @@ if uploaded_file is not None:
 if st.session_state.vectorstore is not None:
     st.header("Ask about your document")
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",   # works with your free tier
+        model="gemini-2.5-flash",   # works with your free tier
         temperature=0.3,
         google_api_key=api_key
     )
