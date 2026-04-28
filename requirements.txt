@@ -12,3 +12,4 @@ plotly>=5.17
 pandas>=2.0
 requests>=2.31
 Pillow>=9.0
+python-pptx reportlab
