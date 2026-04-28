@@ -25,7 +25,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import simpleSplit
 
-# Download NLTK lemmatizer data
+# Download NLTK lemmatizer
 @st.cache_resource
 def download_nltk_lemmatizer():
     nltk.download('wordnet', quiet=True)
@@ -99,7 +99,7 @@ def update_book_status(filename, status=None, progress=None, cover_b64=None, cov
                 book["progress"] = progress
             if cover_b64 is not None:
                 book["cover_b64"] = cover_b64
-                book["cover_url"] = None  # clear url if b64 provided
+                book["cover_url"] = None
             if cover_url is not None:
                 book["cover_url"] = cover_url
                 book["cover_b64"] = None
@@ -114,8 +114,22 @@ def delete_book_from_library(filename):
     library = [b for b in library if b["filename"] != filename]
     save_library(library)
 
+# ---------- Saved summaries & quizzes persistence ----------
+SAVED_DATA_FILE = "saved_data.json"
+
+def load_saved_data():
+    if os.path.exists(SAVED_DATA_FILE):
+        with open(SAVED_DATA_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("summaries", []), data.get("quizzes", [])
+    return [], []
+
+def save_saved_data(summaries, quizzes):
+    with open(SAVED_DATA_FILE, "w") as f:
+        json.dump({"summaries": summaries, "quizzes": quizzes}, f, indent=2)
+
+# ---------- Definition lookup ----------
 def get_definition(word):
-    """Get definition using lemmatizer to find base form."""
     base_word = lemmatizer.lemmatize(word.lower())
     for attempt in [word.lower(), base_word]:
         try:
@@ -129,6 +143,7 @@ def get_definition(word):
             continue
     return None
 
+# ---------- Study aids ----------
 def create_ppt(summary_text, filename="study_aids.pptx"):
     prs = Presentation()
     slide_layout = prs.slide_layouts[1]
@@ -136,7 +151,7 @@ def create_ppt(summary_text, filename="study_aids.pptx"):
     title = slide.shapes.title
     title.text = "Book Summary"
     content = slide.placeholders[1]
-    content.text = summary_text[:500]  # limit
+    content.text = summary_text[:500]
     prs.save(filename)
     return filename
 
@@ -211,6 +226,19 @@ if "cover_url_temp" not in st.session_state:
     st.session_state.cover_url_temp = ""
 if "imported" not in st.session_state:
     st.session_state.imported = False
+if "current_summary" not in st.session_state:
+    st.session_state.current_summary = None
+if "current_summary_source" not in st.session_state:
+    st.session_state.current_summary_source = None
+if "current_summary_original" not in st.session_state:
+    st.session_state.current_summary_original = None
+
+# Load persisted summaries and quizzes
+saved_summaries, saved_quizzes = load_saved_data()
+if saved_summaries:
+    st.session_state.saved_summaries = saved_summaries
+if saved_quizzes:
+    st.session_state.saved_quizzes = saved_quizzes
 
 # ---------- Sidebar ----------
 with st.sidebar:
@@ -229,6 +257,7 @@ with st.sidebar:
         st.session_state.rare_words = []
         st.session_state.word_definitions = {}
         st.session_state.quiz_questions = []
+        st.session_state.current_summary = None
         st.rerun()
     
     if st.button("📤 Export library (JSON)"):
@@ -243,10 +272,42 @@ with st.sidebar:
         save_library([])
         st.success("All books removed from library.")
         st.rerun()
+    
+    # Import library in sidebar (always visible)
+    uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
+    if uploaded_lib and not st.session_state.imported:
+        try:
+            new_lib = json.load(uploaded_lib)
+            if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
+                save_library(new_lib)
+                st.session_state.imported = True
+                st.success("Library imported! Refreshing...")
+                st.rerun()
+            else:
+                st.error("Invalid JSON structure. Expected a list of book objects.")
+        except Exception as e:
+            st.error(f"Invalid JSON file: {e}")
+    if not uploaded_lib and st.session_state.imported:
+        st.session_state.imported = False
 
 # ---------- Main area ----------
 st.title("📚 Contextual Reader")
 st.markdown("*Your personal AI reading companion*")
+
+# Import area when no book is loaded
+if st.session_state.vectorstore is None:
+    with st.expander("📥 Import library from JSON (no book loaded)"):
+        uploaded_lib_main = st.file_uploader("Choose JSON file", type="json", key="main_import")
+        if uploaded_lib_main:
+            try:
+                new_lib = json.load(uploaded_lib_main)
+                if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
+                    save_library(new_lib)
+                    st.success("Library imported! You can now upload a new book or refresh to see it.")
+                else:
+                    st.error("Invalid JSON structure.")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
 uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
 
@@ -297,19 +358,19 @@ if uploaded_file is not None:
             rare = {w: c for w, c in freq.items() if w not in stop_words and 1 <= c <= 3 and len(w) >= 3}
             st.session_state.rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
 
-            # Add to library without cover (user can add cover later in Library tab)
+            # Add to library (no cover yet)
             add_book_to_library(uploaded_file.name, len(words), stats)
             os.remove("temp.pdf")
             st.success(f"✅ Processed: {uploaded_file.name}")
             st.balloons()
 
-# ---------- Tabs ----------
+# ---------- Tabs (only shown if a book is loaded) ----------
 if st.session_state.vectorstore is not None:
     api_key = get_api_key()
     if not api_key:
         st.error("❌ GOOGLE_API_KEY missing.")
         st.stop()
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7, google_api_key=api_key)  # higher temp for opinions
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7, google_api_key=api_key)
 
     tabs = st.tabs(["💬 Ask", "📊 Dashboard", "📌 Saved Q&A", "📖 Vocabulary", "🧠 Quiz", "📚 Library", "✍️ Summarize", "📑 Study Aids", "💾 Saved Summaries & Quizzes"])
 
@@ -476,6 +537,7 @@ Text:
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "book": st.session_state.current_filename
                     })
+                    save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                     st.toast("Quiz saved!", icon="✅")
 
         if st.session_state.quiz_questions:
@@ -498,25 +560,9 @@ Text:
         else:
             st.info("Click 'Generate new quiz' to start.")
 
-    # ---------- TAB 6: Library (with cover upload per book) ----------
+    # ---------- TAB 6: Library ----------
     with tabs[5]:
         st.header("📚 Your Library")
-        
-        # Manual import button
-        if st.button("📥 Import library from JSON"):
-            uploaded_json = st.file_uploader("Choose JSON file", type="json", key="manual_import")
-            if uploaded_json:
-                try:
-                    new_lib = json.load(uploaded_json)
-                    if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
-                        save_library(new_lib)
-                        st.success("Library imported! Refreshing...")
-                        st.rerun()
-                    else:
-                        st.error("Invalid JSON structure.")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-        
         library = load_library()
         if not library:
             st.info("No books in library. Upload a PDF to add it.")
@@ -565,7 +611,6 @@ Text:
                         st.caption(f"Uploaded: {book['upload_date']}")
                         st.caption(f"Words: {book['word_count']:,}")
                     with cols[2]:
-                        # Cover upload/update for this book
                         new_cover_img = st.file_uploader("Update cover", type=["jpg","png"], key=f"cover_{idx}_{book['filename']}", label_visibility="collapsed")
                         new_cover_url = st.text_input("Or URL", key=f"coverurl_{idx}_{book['filename']}", placeholder="https://...")
                         if st.button("Set cover", key=f"setcover_{idx}_{book['filename']}"):
@@ -595,79 +640,91 @@ Text:
                             st.rerun()
                     st.divider()
 
-    # ---------- TAB 7: Summarize (existing) ----------
+    # ---------- TAB 7: Summarize (with fixed saving) ----------
     with tabs[6]:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
-        st.markdown("Save summaries for later.")
+        st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
         
+        # Summarize from book by page range
         if st.session_state.chunks_metadata:
-            pages = sorted(set(p for _, p in st.session_state.chunks_metadata))
-            min_p, max_p = min(pages), max(pages)
-            page_range = st.slider("Select page range", min_p, max_p, (min_p, min(min_p+10, max_p)))
-            if st.button("Summarize selected pages"):
-                selected = [t for t, p in st.session_state.chunks_metadata if page_range[0] <= p <= page_range[1]]
-                if selected:
-                    text_to_sum = "\n\n".join(selected)[:8000]
+            pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
+            min_page = min(pages) if pages else 1
+            max_page = max(pages) if pages else 1
+            page_range = st.slider("Select page range from the book", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)))
+            
+            if st.button("Summarize selected pages", key="summarize_pages"):
+                selected_text = []
+                for text, page in st.session_state.chunks_metadata:
+                    if page_range[0] <= page <= page_range[1]:
+                        selected_text.append(text)
+                if selected_text:
+                    text_to_sum = "\n\n".join(selected_text)[:8000]
                     hash_key = hashlib.md5(text_to_sum.encode()).hexdigest()
                     if hash_key in st.session_state.summary_cache:
                         summary = st.session_state.summary_cache[hash_key]
-                        st.success(summary)
-                        if st.button("💾 Save this summary", key="save_cached"):
-                            st.session_state.saved_summaries.append({
-                                "original": text_to_sum[:200]+"...",
-                                "summary": summary,
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "source": f"Pages {page_range[0]}-{page_range[1]}"
-                            })
-                            st.toast("Saved!")
                     else:
                         with st.spinner("Generating summary..."):
-                            prompt = f"Summarize concisely:\n\n{text_to_sum}"
+                            prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
                             response = llm.invoke(prompt)
                             summary = response.content
                             st.session_state.summary_cache[hash_key] = summary
-                            st.success(summary)
-                            if st.button("💾 Save this summary", key="save_new"):
-                                st.session_state.saved_summaries.append({
-                                    "original": text_to_sum[:200]+"...",
-                                    "summary": summary,
-                                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "source": f"Pages {page_range[0]}-{page_range[1]}"
-                                })
-                                st.toast("Saved!")
-        st.markdown("---")
-        st.subheader("Or paste custom text")
-        manual = st.text_area("Paste text", height=200)
-        if st.button("Summarize custom text") and manual:
-            hash_key = hashlib.md5(manual.encode()).hexdigest()
-            if hash_key in st.session_state.summary_cache:
-                summary = st.session_state.summary_cache[hash_key]
-                st.success(summary)
-                if st.button("💾 Save this summary", key="save_manual_cached"):
+                    # Store in session state
+                    st.session_state.current_summary = summary
+                    st.session_state.current_summary_source = f"Pages {page_range[0]}-{page_range[1]}"
+                    st.session_state.current_summary_original = text_to_sum[:200] + "..."
+                    st.rerun()
+                else:
+                    st.warning("No text in that page range.")
+            
+            # Display current summary if exists
+            if st.session_state.current_summary and st.session_state.current_summary_source.startswith("Pages"):
+                st.success(st.session_state.current_summary)
+                if st.button("💾 Save this summary", key="save_summary_fixed"):
                     st.session_state.saved_summaries.append({
-                        "original": manual[:200]+"...",
-                        "summary": summary,
+                        "original": st.session_state.current_summary_original,
+                        "summary": st.session_state.current_summary,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "source": "Custom text"
+                        "source": st.session_state.current_summary_source
                     })
-                    st.toast("Saved!")
+                    save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
+                    st.toast("Summary saved!", icon="✅")
+        
+        st.markdown("---")
+        st.subheader("Or paste your own text")
+        manual_text = st.text_area("Paste text to summarize", height=200)
+        
+        if st.button("Summarize custom text", key="summarize_custom"):
+            if manual_text:
+                text_to_sum = manual_text[:8000]
+                hash_key = hashlib.md5(text_to_sum.encode()).hexdigest()
+                if hash_key in st.session_state.summary_cache:
+                    summary = st.session_state.summary_cache[hash_key]
+                else:
+                    with st.spinner("Generating summary..."):
+                        prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
+                        response = llm.invoke(prompt)
+                        summary = response.content
+                        st.session_state.summary_cache[hash_key] = summary
+                st.session_state.current_summary = summary
+                st.session_state.current_summary_source = "Custom text"
+                st.session_state.current_summary_original = manual_text[:200] + "..."
+                st.rerun()
             else:
-                with st.spinner("Generating summary..."):
-                    prompt = f"Summarize concisely:\n\n{manual[:8000]}"
-                    response = llm.invoke(prompt)
-                    summary = response.content
-                    st.session_state.summary_cache[hash_key] = summary
-                    st.success(summary)
-                    if st.button("💾 Save this summary", key="save_manual_new"):
-                        st.session_state.saved_summaries.append({
-                            "original": manual[:200]+"...",
-                            "summary": summary,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "source": "Custom text"
-                        })
-                        st.toast("Saved!")
+                st.warning("Please enter some text.")
+        
+        if st.session_state.current_summary and st.session_state.current_summary_source == "Custom text":
+            st.success(st.session_state.current_summary)
+            if st.button("💾 Save this summary", key="save_summary_custom_fixed"):
+                st.session_state.saved_summaries.append({
+                    "original": st.session_state.current_summary_original,
+                    "summary": st.session_state.current_summary,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "source": "Custom text"
+                })
+                save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
+                st.toast("Summary saved!", icon="✅")
 
-    # ---------- TAB 8: Study Aids (PPT + PDF) ----------
+    # ---------- TAB 8: Study Aids ----------
     with tabs[7]:
         st.header("Generate Study Aids")
         st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter or custom text.")
@@ -689,24 +746,20 @@ Text:
         
         if study_text and st.button("Create Study Aids"):
             with st.spinner("Generating summary and slides..."):
-                # First get a concise summary
                 prompt = f"Summarize the following text in 5 bullet points suitable for a PowerPoint slide:\n\n{study_text[:8000]}"
                 summary_resp = llm.invoke(prompt)
                 summary_text = summary_resp.content
                 st.subheader("Chapter Summary")
                 st.write(summary_text)
                 
-                # Create PowerPoint
                 ppt_file = create_ppt(summary_text, "study_aids.pptx")
                 with open(ppt_file, "rb") as f:
                     st.download_button("Download PowerPoint", f, "study_aids.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
                 os.remove(ppt_file)
                 
-                # Create PDF
                 pdf_buffer = create_pdf(summary_text, "summary.pdf")
                 st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
                 
-                # Also offer to save this summary
                 if st.button("💾 Save this summary to my saved summaries"):
                     st.session_state.saved_summaries.append({
                         "original": study_text[:200]+"...",
@@ -714,6 +767,7 @@ Text:
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "source": "Study aids generation"
                     })
+                    save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                     st.toast("Saved!")
 
     # ---------- TAB 9: Saved Summaries & Quizzes ----------
@@ -727,7 +781,8 @@ Text:
                     st.caption(f"Original excerpt: {s['original']}")
                     st.write(f"**Summary:** {s['summary']}")
             if st.button("Export all summaries as JSON"):
-                st.download_button("Download", json.dumps(st.session_state.saved_summaries, indent=2), "saved_summaries.json", "application/json")
+                json_str = json.dumps(st.session_state.saved_summaries, indent=2)
+                st.download_button("Download", json_str, "saved_summaries.json", "application/json")
         else:
             st.info("No saved summaries yet.")
         
@@ -742,7 +797,8 @@ Text:
                             st.write(f"  - {opt}")
                         st.write(f"*Correct answer:* {q['options'][q['correct']]}")
             if st.button("Export all quizzes as JSON"):
-                st.download_button("Download", json.dumps(st.session_state.saved_quizzes, indent=2), "saved_quizzes.json", "application/json")
+                json_str = json.dumps(st.session_state.saved_quizzes, indent=2)
+                st.download_button("Download", json_str, "saved_quizzes.json", "application/json")
         else:
             st.info("No saved quizzes yet.")
 
