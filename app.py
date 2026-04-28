@@ -20,6 +20,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 import plotly.express as px
 from PIL import Image
 from nltk.stem import WordNetLemmatizer
+
+# ---------- PPT & PDF generation (using python-pptx and reportlab) ----------
 from pptx import Presentation
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -142,15 +144,17 @@ def get_definition(word):
             continue
     return None
 
-# ---------- Study aids ----------
+# ---------- Study aids (PPT + PDF) ----------
 def create_ppt(summary_text, filename="study_aids.pptx"):
     prs = Presentation()
-    slide_layout = prs.slide_layouts[1]
+    slide_layout = prs.slide_layouts[1]  # title and content
     slide = prs.slides.add_slide(slide_layout)
     title = slide.shapes.title
-    title.text = "Book Summary"
+    title.text = "Chapter Summary"
     content = slide.placeholders[1]
-    content.text = summary_text[:500]
+    # split summary into lines if too long
+    lines = summary_text.split('\n')
+    content.text = "\n".join(lines[:10])  # limit to 10 bullet points
     prs.save(filename)
     return filename
 
@@ -239,12 +243,12 @@ if saved_summaries:
 if saved_quizzes:
     st.session_state.saved_quizzes = saved_quizzes
 
-# ---------- Sidebar (always visible, includes import) ----------
+# ---------- Sidebar (always visible) ----------
 with st.sidebar:
     st.markdown("## 📖 Contextual Reader")
     st.markdown("---")
     
-    # Import library – always visible
+    # Import library
     uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
     if uploaded_lib and not st.session_state.imported:
         try:
@@ -341,7 +345,6 @@ if uploaded_file is not None:
             rare = {w: c for w, c in freq.items() if w not in stop_words and 1 <= c <= 3 and len(w) >= 3}
             st.session_state.rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
 
-            # Add to library
             add_book_to_library(uploaded_file.name, len(words), stats)
             os.remove("temp.pdf")
             st.success(f"✅ Processed: {uploaded_file.name}")
@@ -622,12 +625,11 @@ Text:
                             st.rerun()
                     st.divider()
 
-    # ---------- TAB 7: Summarize (with page range restored) ----------
+    # ---------- TAB 7: Summarize ----------
     with tabs[6]:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
         
-        # Summarize from book by page range – shows only if a book is loaded
         if st.session_state.chunks_metadata:
             pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
             min_page = min(pages) if pages else 1
@@ -657,7 +659,6 @@ Text:
                 else:
                     st.warning("No text in that page range.")
             
-            # Display current summary and save button
             if st.session_state.current_summary and st.session_state.current_summary_source.startswith("Pages"):
                 st.success(st.session_state.current_summary)
                 if st.button("💾 Save this summary", key="save_summary_pages"):
@@ -707,93 +708,60 @@ Text:
                 save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                 st.toast("Summary saved!", icon="✅")
 
-       # ---------- TAB 8: Study Aids ----------
+    # ---------- TAB 8: Study Aids (fixed) ----------
     with tabs[7]:
         st.header("Generate Study Aids")
-        st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter or custom text.")
+        st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter.")
         
-        study_source = st.radio("Source", ["From current book (page range)", "Paste custom text"], key="study_source")
-        study_text = ""
-        if study_source == "From current book (page range)" and st.session_state.chunks_metadata:
-            pages = sorted(set(p for _, p in st.session_state.chunks_metadata))
-            min_p, max_p = min(pages), max(pages)
-            study_range = st.slider("Select page range for study aids", min_p, max_p, (min_p, min(min_p+10, max_p)))
-            if st.button("Generate from book pages"):
-                with st.spinner("Processing..."):
-                    selected = [t for t, p in st.session_state.chunks_metadata if study_range[0] <= p <= study_range[1]]
-                    if selected:
-                        study_text = "\n\n".join(selected)[:8000]
-                    else:
-                        st.warning("No text in that range.")
+        if st.session_state.chunks_metadata:
+            pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
+            min_page = min(pages) if pages else 1
+            max_page = max(pages) if pages else 1
+            study_range = st.slider("Select page range for study aids", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="study_range")
+            
+            if st.button("Generate Study Aids", key="gen_study"):
+                selected_text = []
+                for text, page in st.session_state.chunks_metadata:
+                    if study_range[0] <= page <= study_range[1]:
+                        selected_text.append(text)
+                if selected_text:
+                    study_text = "\n\n".join(selected_text)[:8000]
+                    with st.spinner("Generating summary and slides..."):
+                        prompt = f"Summarize the following text in 5 bullet points suitable for a PowerPoint slide:\n\n{study_text}"
+                        response = llm.invoke(prompt)
+                        summary_text = response.content
+                        st.subheader("Chapter Summary")
+                        st.write(summary_text)
+                        
+                        # Create PPT
+                        try:
+                            ppt_filename = create_ppt(summary_text, "study_aids.pptx")
+                            with open(ppt_filename, "rb") as f:
+                                st.download_button("Download PowerPoint (.pptx)", f, "study_aids.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+                            os.remove(ppt_filename)
+                        except Exception as e:
+                            st.error(f"PPT generation error: {e}")
+                        
+                        # Create PDF
+                        try:
+                            pdf_buffer = create_pdf(summary_text, "summary.pdf")
+                            st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
+                        except Exception as e:
+                            st.error(f"PDF generation error: {e}")
+                        
+                        if st.button("💾 Save this summary to my saved summaries", key="save_study_summary"):
+                            st.session_state.saved_summaries.append({
+                                "original": study_text[:200]+"...",
+                                "summary": summary_text,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "source": "Study aids generation"
+                            })
+                            save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
+                            st.toast("Saved!")
+                else:
+                    st.warning("No text in that page range.")
         else:
-            study_text = st.text_area("Paste the chapter text", height=300, key="study_custom_text")
-        
-        if study_text and st.button("Create Study Aids"):
-            with st.spinner("Generating summary and study aids..."):
-                try:
-                    # 1. Generate summary from LLM
-                    prompt = f"Summarize the following text in 5 bullet points suitable for a PowerPoint slide:\n\n{study_text[:8000]}"
-                    summary_resp = llm.invoke(prompt)
-                    summary_text = summary_resp.content
-                    st.subheader("Chapter Summary")
-                    st.write(summary_text)
-                    
-                    # 2. Try to create PowerPoint
-                    try:
-                        from pptx import Presentation
-                        prs = Presentation()
-                        slide_layout = prs.slide_layouts[1]
-                        slide = prs.slides.add_slide(slide_layout)
-                        title = slide.shapes.title
-                        title.text = "Book Summary"
-                        content = slide.placeholders[1]
-                        content.text = summary_text[:500]
-                        ppt_buffer = BytesIO()
-                        prs.save(ppt_buffer)
-                        ppt_buffer.seek(0)
-                        st.download_button("Download PowerPoint", ppt_buffer, "study_aids.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
-                    except Exception as e:
-                        st.warning(f"PowerPoint generation failed: {e}. Downloading summary as text instead.")
-                        st.download_button("Download Summary as Text", summary_text, "summary.txt", "text/plain")
-                    
-                    # 3. Try to create PDF
-                    try:
-                        from reportlab.lib.pagesizes import letter
-                        from reportlab.pdfgen import canvas
-                        from reportlab.lib.utils import simpleSplit
-                        pdf_buffer = BytesIO()
-                        c = canvas.Canvas(pdf_buffer, pagesize=letter)
-                        width, height = letter
-                        y = height - 50
-                        lines = simpleSplit(summary_text, 'Helvetica', 12, width - 100)
-                        for line in lines:
-                            if y < 50:
-                                c.showPage()
-                                y = height - 50
-                            c.drawString(50, y, line)
-                            y -= 15
-                        c.save()
-                        pdf_buffer.seek(0)
-                        st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
-                    except Exception as e:
-                        st.warning(f"PDF generation failed: {e}. Downloading summary as text instead.")
-                        st.download_button("Download Summary as Text", summary_text, "summary.txt", "text/plain")
-                    
-                    # 4. Save to saved summaries if user wants
-                    if st.button("💾 Save this summary to my saved summaries", key="save_study_summary"):
-                        st.session_state.saved_summaries.append({
-                            "original": study_text[:200]+"...",
-                            "summary": summary_text,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "source": "Study aids generation"
-                        })
-                        save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
-                        st.toast("Saved!")
-                except Exception as e:
-                    st.error(f"Error generating study aids: {e}")
-        else:
-            if study_source == "From current book (page range)" and not st.session_state.chunks_metadata:
-                st.info("No book loaded. Please upload a book first or use custom text.")
+            st.info("No book loaded. Upload a PDF to generate study aids.")
 
     # ---------- TAB 9: Saved Summaries & Quizzes ----------
     with tabs[8]:
