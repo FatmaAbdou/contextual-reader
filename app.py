@@ -34,7 +34,6 @@ def download_nltk_lemmatizer():
 
 lemmatizer = download_nltk_lemmatizer()
 
-# ---------- Page config ----------
 st.set_page_config(page_title="Contextual Reader", page_icon="📚", layout="wide")
 
 # ---------- Helper functions ----------
@@ -240,40 +239,12 @@ if saved_summaries:
 if saved_quizzes:
     st.session_state.saved_quizzes = saved_quizzes
 
-# ---------- Sidebar ----------
+# ---------- Sidebar (always visible, includes import) ----------
 with st.sidebar:
     st.markdown("## 📖 Contextual Reader")
     st.markdown("---")
     
-    if st.button("🗑️ Clear current book"):
-        st.session_state.vectorstore = None
-        st.session_state.book_stats = None
-        st.session_state.full_text = ""
-        st.session_state.current_filename = None
-        st.session_state.chunks_metadata = []
-        st.session_state.last_question = ""
-        st.session_state.last_answer = ""
-        st.session_state.last_context_docs = []
-        st.session_state.rare_words = []
-        st.session_state.word_definitions = {}
-        st.session_state.quiz_questions = []
-        st.session_state.current_summary = None
-        st.rerun()
-    
-    if st.button("📤 Export library (JSON)"):
-        lib = load_library()
-        if lib:
-            json_str = json.dumps(lib, indent=2)
-            st.download_button("Download library", json_str, "book_library.json", "application/json")
-        else:
-            st.info("No library to export.")
-    
-    if st.button("🗑️ Clear entire library"):
-        save_library([])
-        st.success("All books removed from library.")
-        st.rerun()
-    
-    # Import library in sidebar (always visible)
+    # Import library – always visible
     uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
     if uploaded_lib and not st.session_state.imported:
         try:
@@ -284,30 +255,42 @@ with st.sidebar:
                 st.success("Library imported! Refreshing...")
                 st.rerun()
             else:
-                st.error("Invalid JSON structure. Expected a list of book objects.")
+                st.error("Invalid JSON structure.")
         except Exception as e:
             st.error(f"Invalid JSON file: {e}")
     if not uploaded_lib and st.session_state.imported:
         st.session_state.imported = False
+    
+    if st.button("📤 Export library (JSON)"):
+        lib = load_library()
+        if lib:
+            json_str = json.dumps(lib, indent=2)
+            st.download_button("Download library", json_str, "book_library.json", "application/json")
+        else:
+            st.info("No library to export.")
+    st.caption("ℹ️ Library JSON stores only metadata (titles, progress, covers). To keep your RAG state, you must re-upload the PDF after import.")
+    
+    st.markdown("---")
+    if st.button("🗑️ Clear current book"):
+        st.session_state.vectorstore = None
+        st.session_state.book_stats = None
+        st.session_state.full_text = ""
+        st.session_state.current_filename = None
+        st.session_state.chunks_metadata = []
+        st.session_state.rare_words = []
+        st.session_state.word_definitions = {}
+        st.session_state.quiz_questions = []
+        st.session_state.current_summary = None
+        st.rerun()
+    
+    if st.button("🗑️ Clear entire library"):
+        save_library([])
+        st.success("All books removed from library.")
+        st.rerun()
 
 # ---------- Main area ----------
 st.title("📚 Contextual Reader")
 st.markdown("*Your personal AI reading companion*")
-
-# Import area when no book is loaded
-if st.session_state.vectorstore is None:
-    with st.expander("📥 Import library from JSON (no book loaded)"):
-        uploaded_lib_main = st.file_uploader("Choose JSON file", type="json", key="main_import")
-        if uploaded_lib_main:
-            try:
-                new_lib = json.load(uploaded_lib_main)
-                if isinstance(new_lib, list) and all(isinstance(b, dict) and "filename" in b for b in new_lib):
-                    save_library(new_lib)
-                    st.success("Library imported! You can now upload a new book or refresh to see it.")
-                else:
-                    st.error("Invalid JSON structure.")
-            except Exception as e:
-                st.error(f"Error: {e}")
 
 uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
 
@@ -358,13 +341,13 @@ if uploaded_file is not None:
             rare = {w: c for w, c in freq.items() if w not in stop_words and 1 <= c <= 3 and len(w) >= 3}
             st.session_state.rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
 
-            # Add to library (no cover yet)
+            # Add to library
             add_book_to_library(uploaded_file.name, len(words), stats)
             os.remove("temp.pdf")
             st.success(f"✅ Processed: {uploaded_file.name}")
             st.balloons()
 
-# ---------- Tabs (only shown if a book is loaded) ----------
+# ---------- Tabs (only when a book is loaded) ----------
 if st.session_state.vectorstore is not None:
     api_key = get_api_key()
     if not api_key:
@@ -374,7 +357,7 @@ if st.session_state.vectorstore is not None:
 
     tabs = st.tabs(["💬 Ask", "📊 Dashboard", "📌 Saved Q&A", "📖 Vocabulary", "🧠 Quiz", "📚 Library", "✍️ Summarize", "📑 Study Aids", "💾 Saved Summaries & Quizzes"])
 
-    # ---------- TAB 1: Ask (with opinions) ----------
+    # ---------- TAB 1: Ask ----------
     with tabs[0]:
         st.header("Ask about this book (literary critique)")
         question = st.text_input("Your question:", placeholder="e.g., What is your opinion of Mr. Darcy?", key="ask_input")
@@ -458,7 +441,6 @@ Answer:"""
     # ---------- TAB 4: Vocabulary ----------
     with tabs[3]:
         st.header("Vocabulary Builder")
-        st.subheader("Rare words from this book")
         if st.session_state.rare_words:
             rare_df = pd.DataFrame(st.session_state.rare_words, columns=["Word", "Frequency"])
             st.dataframe(rare_df, use_container_width=True)
@@ -640,17 +622,17 @@ Text:
                             st.rerun()
                     st.divider()
 
-    # ---------- TAB 7: Summarize (with fixed saving) ----------
+    # ---------- TAB 7: Summarize (with page range restored) ----------
     with tabs[6]:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
         
-        # Summarize from book by page range
+        # Summarize from book by page range – shows only if a book is loaded
         if st.session_state.chunks_metadata:
             pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
             min_page = min(pages) if pages else 1
             max_page = max(pages) if pages else 1
-            page_range = st.slider("Select page range from the book", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)))
+            page_range = st.slider("Select page range from the book", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="page_range_slider")
             
             if st.button("Summarize selected pages", key="summarize_pages"):
                 selected_text = []
@@ -668,7 +650,6 @@ Text:
                             response = llm.invoke(prompt)
                             summary = response.content
                             st.session_state.summary_cache[hash_key] = summary
-                    # Store in session state
                     st.session_state.current_summary = summary
                     st.session_state.current_summary_source = f"Pages {page_range[0]}-{page_range[1]}"
                     st.session_state.current_summary_original = text_to_sum[:200] + "..."
@@ -676,10 +657,10 @@ Text:
                 else:
                     st.warning("No text in that page range.")
             
-            # Display current summary if exists
+            # Display current summary and save button
             if st.session_state.current_summary and st.session_state.current_summary_source.startswith("Pages"):
                 st.success(st.session_state.current_summary)
-                if st.button("💾 Save this summary", key="save_summary_fixed"):
+                if st.button("💾 Save this summary", key="save_summary_pages"):
                     st.session_state.saved_summaries.append({
                         "original": st.session_state.current_summary_original,
                         "summary": st.session_state.current_summary,
@@ -688,10 +669,12 @@ Text:
                     })
                     save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                     st.toast("Summary saved!", icon="✅")
+        else:
+            st.info("No book loaded. Upload a PDF to summarize its pages.")
         
         st.markdown("---")
         st.subheader("Or paste your own text")
-        manual_text = st.text_area("Paste text to summarize", height=200)
+        manual_text = st.text_area("Paste text to summarize", height=200, key="custom_summary_text")
         
         if st.button("Summarize custom text", key="summarize_custom"):
             if manual_text:
@@ -714,7 +697,7 @@ Text:
         
         if st.session_state.current_summary and st.session_state.current_summary_source == "Custom text":
             st.success(st.session_state.current_summary)
-            if st.button("💾 Save this summary", key="save_summary_custom_fixed"):
+            if st.button("💾 Save this summary", key="save_summary_custom"):
                 st.session_state.saved_summaries.append({
                     "original": st.session_state.current_summary_original,
                     "summary": st.session_state.current_summary,
@@ -729,7 +712,7 @@ Text:
         st.header("Generate Study Aids")
         st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter or custom text.")
         
-        study_source = st.radio("Source", ["From current book (page range)", "Paste custom text"])
+        study_source = st.radio("Source", ["From current book (page range)", "Paste custom text"], key="study_source")
         study_text = ""
         if study_source == "From current book (page range)" and st.session_state.chunks_metadata:
             pages = sorted(set(p for _, p in st.session_state.chunks_metadata))
@@ -742,7 +725,7 @@ Text:
                 else:
                     st.warning("No text in that range.")
         else:
-            study_text = st.text_area("Paste the chapter text", height=300)
+            study_text = st.text_area("Paste the chapter text", height=300, key="study_custom_text")
         
         if study_text and st.button("Create Study Aids"):
             with st.spinner("Generating summary and slides..."):
@@ -760,7 +743,7 @@ Text:
                 pdf_buffer = create_pdf(summary_text, "summary.pdf")
                 st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
                 
-                if st.button("💾 Save this summary to my saved summaries"):
+                if st.button("💾 Save this summary to my saved summaries", key="save_study_summary"):
                     st.session_state.saved_summaries.append({
                         "original": study_text[:200]+"...",
                         "summary": summary_text,
