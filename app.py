@@ -150,7 +150,7 @@ def create_ppt(summary_text, filename="study_aids.pptx"):
     title = slide.shapes.title
     title.text = "Study Guide"
     content = slide.placeholders[1]
-    content.text = summary_text[:1000]  # first 1000 chars
+    content.text = summary_text[:1000]
     prs.save(filename)
     return filename
 
@@ -737,8 +737,7 @@ Text:
                 save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                 st.toast("Summary saved!", icon="✅")
 
-      # ---------- TAB 8: Study Aids (enhanced PPT with multiple slides) ----------
-        # ---------- TAB 8: Study Aids (enhanced PPT with multiple slides) ----------
+    # ---------- TAB 8: Study Aids (enhanced PPT with multiple slides) ----------
     with tabs[7]:
         st.header("Generate Study Aids")
         st.markdown("Create a comprehensive study guide from a textbook chapter: summary, key terms, main ideas, discussion questions, and a quick quiz.")
@@ -900,41 +899,3 @@ Study Guide:"""
 
 else:
     st.info("👈 Upload a PDF to start, or select an existing book from the sidebar.")
-    # ---------- TAB 9: Saved Summaries & Quizzes (with manual refresh) ----------
-with tabs[8]:
-    st.header("Saved Summaries & Quizzes")
-    
-    # Manual refresh button – works even if auto‑load fails
-    if st.button("🔄 Refresh saved data"):
-        summaries, quizzes = load_saved_data()
-        st.session_state.saved_summaries = summaries
-        st.session_state.saved_quizzes = quizzes
-        st.rerun()
-    
-    st.subheader("📝 Saved Summaries")
-    if st.session_state.saved_summaries:
-        for i, s in enumerate(st.session_state.saved_summaries):
-            with st.expander(f"Summary {i+1} - {s['timestamp']} (Source: {s['source']})"):
-                st.caption(f"Original excerpt: {s['original']}")
-                st.write(f"**Summary:** {s['summary']}")
-        if st.button("Export all summaries as JSON"):
-            json_str = json.dumps(st.session_state.saved_summaries, indent=2)
-            st.download_button("Download", json_str, "saved_summaries.json", "application/json")
-    else:
-        st.info("No saved summaries yet. Generate and save a summary from the Summarize tab.")
-
-    st.markdown("---")
-    st.subheader("📋 Saved Quizzes")
-    if st.session_state.saved_quizzes:
-        for i, qz in enumerate(st.session_state.saved_quizzes):
-            with st.expander(f"Quiz {i+1} - {qz['timestamp']} (Book: {qz['book']})"):
-                for j, q in enumerate(qz['questions']):
-                    st.write(f"**Q{j+1}:** {q['question']}")
-                    for opt in q['options']:
-                        st.write(f"  - {opt}")
-                    st.write(f"*Correct answer:* {q['options'][q['correct']]}")
-        if st.button("Export all quizzes as JSON"):
-            json_str = json.dumps(st.session_state.saved_quizzes, indent=2)
-            st.download_button("Download", json_str, "saved_quizzes.json", "application/json")
-    else:
-        st.info("No saved quizzes yet. Generate and save a quiz from the Quiz tab.")
