@@ -20,8 +20,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 import plotly.express as px
 from PIL import Image
 from nltk.stem import WordNetLemmatizer
-
-# ---------- PPT & PDF generation (using python-pptx and reportlab) ----------
 from pptx import Presentation
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -147,14 +145,13 @@ def get_definition(word):
 # ---------- Study aids (PPT + PDF) ----------
 def create_ppt(summary_text, filename="study_aids.pptx"):
     prs = Presentation()
-    slide_layout = prs.slide_layouts[1]  # title and content
+    slide_layout = prs.slide_layouts[1]
     slide = prs.slides.add_slide(slide_layout)
     title = slide.shapes.title
     title.text = "Chapter Summary"
     content = slide.placeholders[1]
-    # split summary into lines if too long
     lines = summary_text.split('\n')
-    content.text = "\n".join(lines[:10])  # limit to 10 bullet points
+    content.text = "\n".join(lines[:10])
     prs.save(filename)
     return filename
 
@@ -192,33 +189,23 @@ class SimpleVectorStore:
         idx = np.argsort(sim)[-k:][::-1]
         return [self.chunks[i] for i in idx]
 
-# ---------- Session state ----------
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
+# ---------- Session state (multi‑book) ----------
+if "books" not in st.session_state:
+    st.session_state.books = {}   # key = filename, value = dict with vectorstore, full_text, stats, chunks_metadata, rare_words
+if "active_book" not in st.session_state:
+    st.session_state.active_book = None
 if "saved_qa" not in st.session_state:
     st.session_state.saved_qa = []
 if "saved_summaries" not in st.session_state:
     st.session_state.saved_summaries = []
 if "saved_quizzes" not in st.session_state:
     st.session_state.saved_quizzes = []
-if "book_stats" not in st.session_state:
-    st.session_state.book_stats = None
-if "full_text" not in st.session_state:
-    st.session_state.full_text = ""
-if "current_filename" not in st.session_state:
-    st.session_state.current_filename = None
-if "chunks_metadata" not in st.session_state:
-    st.session_state.chunks_metadata = []
 if "last_question" not in st.session_state:
     st.session_state.last_question = ""
 if "last_answer" not in st.session_state:
     st.session_state.last_answer = ""
 if "last_context_docs" not in st.session_state:
     st.session_state.last_context_docs = []
-if "rare_words" not in st.session_state:
-    st.session_state.rare_words = []
-if "word_definitions" not in st.session_state:
-    st.session_state.word_definitions = {}
 if "custom_word_lookup" not in st.session_state:
     st.session_state.custom_word_lookup = ""
 if "quiz_questions" not in st.session_state:
@@ -247,6 +234,16 @@ if saved_quizzes:
 with st.sidebar:
     st.markdown("## 📖 Contextual Reader")
     st.markdown("---")
+
+    # Book selection dropdown (if multiple books)
+    if len(st.session_state.books) > 0:
+        book_options = list(st.session_state.books.keys())
+        if st.session_state.active_book not in book_options:
+            st.session_state.active_book = book_options[0] if book_options else None
+        selected_book = st.selectbox("Select active book", book_options, index=book_options.index(st.session_state.active_book) if st.session_state.active_book in book_options else 0)
+        if selected_book != st.session_state.active_book:
+            st.session_state.active_book = selected_book
+            st.rerun()
     
     # Import library
     uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
@@ -276,16 +273,13 @@ with st.sidebar:
     
     st.markdown("---")
     if st.button("🗑️ Clear current book"):
-        st.session_state.vectorstore = None
-        st.session_state.book_stats = None
-        st.session_state.full_text = ""
-        st.session_state.current_filename = None
-        st.session_state.chunks_metadata = []
-        st.session_state.rare_words = []
-        st.session_state.word_definitions = {}
-        st.session_state.quiz_questions = []
-        st.session_state.current_summary = None
-        st.rerun()
+        if st.session_state.active_book and st.session_state.active_book in st.session_state.books:
+            del st.session_state.books[st.session_state.active_book]
+            if st.session_state.books:
+                st.session_state.active_book = list(st.session_state.books.keys())[0]
+            else:
+                st.session_state.active_book = None
+            st.rerun()
     
     if st.button("🗑️ Clear entire library"):
         save_library([])
@@ -299,30 +293,27 @@ st.markdown("*Your personal AI reading companion*")
 uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
 
 if uploaded_file is not None:
-    if st.session_state.vectorstore is None or st.session_state.current_filename != uploaded_file.name:
-        with st.spinner("Processing PDF... (this runs only once per book)"):
+    filename = uploaded_file.name
+    if filename not in st.session_state.books:
+        with st.spinner(f"Processing {filename}..."):
             with open("temp.pdf", "wb") as f:
                 f.write(uploaded_file.getbuffer())
             loader = PyPDFLoader("temp.pdf")
             documents = loader.load()
             full_text = " ".join([d.page_content for d in documents])
-            st.session_state.full_text = full_text
 
+            # Chunks with page numbers
             chunks_meta = []
             for doc in documents:
                 splits = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100).split_text(doc.page_content)
                 for s in splits:
                     chunks_meta.append((s, doc.metadata.get("page", 0)+1))
-            st.session_state.chunks_metadata = chunks_meta
 
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
             chunks = text_splitter.split_documents(documents)
-            st.info(f"📄 Split into {len(chunks)} chunks")
             embeddings = get_embeddings()
             vectorstore = SimpleVectorStore(embeddings)
             vectorstore.add_documents(chunks)
-            st.session_state.vectorstore = vectorstore
-            st.session_state.current_filename = uploaded_file.name
 
             # Word statistics
             words = re.findall(r'\b[a-zA-Z]{2,}\b', full_text.lower())
@@ -338,20 +329,40 @@ if uploaded_file is not None:
                 "avg_sentence_len": round(avg_sentence_len, 1),
                 "reading_time": round(reading_time_min, 1),
             }
-            st.session_state.book_stats = stats
 
             # Rare words
             freq = Counter(words)
             rare = {w: c for w, c in freq.items() if w not in stop_words and 1 <= c <= 3 and len(w) >= 3}
-            st.session_state.rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
+            rare_words = sorted(rare.items(), key=lambda x: x[1])[:50]
 
-            add_book_to_library(uploaded_file.name, len(words), stats)
+            # Store in books dict
+            st.session_state.books[filename] = {
+                "vectorstore": vectorstore,
+                "full_text": full_text,
+                "chunks_metadata": chunks_meta,
+                "stats": stats,
+                "rare_words": rare_words
+            }
+            if st.session_state.active_book is None:
+                st.session_state.active_book = filename
+
+            # Add to library JSON (only metadata)
+            add_book_to_library(filename, len(words), stats)
             os.remove("temp.pdf")
-            st.success(f"✅ Processed: {uploaded_file.name}")
+            st.success(f"✅ Processed: {filename}")
             st.balloons()
+    else:
+        st.info(f"📚 '{filename}' is already loaded. Select it from the sidebar to ask questions.")
 
-# ---------- Tabs (only when a book is loaded) ----------
-if st.session_state.vectorstore is not None:
+# ---------- Tabs (only when a book is active) ----------
+if st.session_state.active_book is not None and st.session_state.active_book in st.session_state.books:
+    book_data = st.session_state.books[st.session_state.active_book]
+    vectorstore = book_data["vectorstore"]
+    full_text = book_data["full_text"]
+    chunks_metadata = book_data["chunks_metadata"]
+    book_stats = book_data["stats"]
+    rare_words = book_data["rare_words"]
+
     api_key = get_api_key()
     if not api_key:
         st.error("❌ GOOGLE_API_KEY missing.")
@@ -362,14 +373,14 @@ if st.session_state.vectorstore is not None:
 
     # ---------- TAB 1: Ask ----------
     with tabs[0]:
-        st.header("Ask about this book (literary critique)")
+        st.header(f"Ask about '{st.session_state.active_book}' (literary critique)")
         question = st.text_input("Your question:", placeholder="e.g., What is your opinion of Mr. Darcy?", key="ask_input")
         ask_button = st.button("Ask", key="ask_submit")
         
         if ask_button and question:
             with st.spinner("Thinking..."):
                 try:
-                    docs = st.session_state.vectorstore.similarity_search(question, k=12)
+                    docs = vectorstore.similarity_search(question, k=12)
                     if not docs:
                         st.warning("No relevant passages found.")
                         st.session_state.last_answer = ""
@@ -407,9 +418,9 @@ Answer:"""
 
     # ---------- TAB 2: Dashboard ----------
     with tabs[1]:
-        st.header("Current Book Dashboard")
-        if st.session_state.book_stats:
-            s = st.session_state.book_stats
+        st.header(f"Dashboard: {st.session_state.active_book}")
+        if book_stats:
+            s = book_stats
             cols = st.columns(4)
             cols[0].metric("Characters", f"{s['characters']:,}")
             cols[1].metric("Words", f"{s['words']:,}")
@@ -421,14 +432,14 @@ Answer:"""
             if chars:
                 names = [n.strip() for n in chars.split(",")]
                 counts = {}
-                text_lower = st.session_state.full_text.lower()
+                text_lower = full_text.lower()
                 for n in names:
                     pattern = r'\b' + re.escape(n.lower()) + r'\b'
                     counts[n] = len(re.findall(pattern, text_lower))
                 fig = px.bar(x=list(counts.keys()), y=list(counts.values()), color_discrete_sequence=["#4a6fa5"])
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No book loaded. Upload a PDF to see dashboard.")
+            st.info("No stats available.")
 
     # ---------- TAB 3: Saved Q&A ----------
     with tabs[2]:
@@ -444,10 +455,10 @@ Answer:"""
     # ---------- TAB 4: Vocabulary ----------
     with tabs[3]:
         st.header("Vocabulary Builder")
-        if st.session_state.rare_words:
-            rare_df = pd.DataFrame(st.session_state.rare_words, columns=["Word", "Frequency"])
+        if rare_words:
+            rare_df = pd.DataFrame(rare_words, columns=["Word", "Frequency"])
             st.dataframe(rare_df, use_container_width=True)
-            selected_word = st.selectbox("Select a rare word to see its definition", [w for w, _ in st.session_state.rare_words])
+            selected_word = st.selectbox("Select a rare word to see its definition", [w for w, _ in rare_words])
             if selected_word:
                 if selected_word not in st.session_state.word_definitions:
                     with st.spinner("Looking up definition..."):
@@ -473,7 +484,7 @@ Answer:"""
 
         if st.button("📤 Export rare words + definitions (CSV)"):
             export_data = []
-            for word, freq in st.session_state.rare_words:
+            for word, freq in rare_words:
                 if word not in st.session_state.word_definitions:
                     defn = get_definition(word)
                     st.session_state.word_definitions[word] = defn if defn else "Definition not found."
@@ -490,13 +501,13 @@ Answer:"""
             if st.button("🎲 Generate new quiz (5 questions)"):
                 with st.spinner("Generating quiz..."):
                     try:
-                        total_chunks = len(st.session_state.vectorstore.chunks)
+                        total_chunks = len(vectorstore.chunks)
                         if total_chunks == 0:
                             st.error("No text chunks available.")
                         else:
                             sample_size = min(20, total_chunks)
                             random_indices = random.sample(range(total_chunks), sample_size)
-                            sample_chunks = [st.session_state.vectorstore.chunks[i].page_content for i in random_indices]
+                            sample_chunks = [vectorstore.chunks[i].page_content for i in random_indices]
                             context = "\n\n".join(sample_chunks)[:8000]
                             prompt = f"""Generate 5 multiple-choice questions based on the following text. Return a JSON list with each question containing: "question", "options" (list of 4 strings), "correct" (0-based index of correct option). Example: [{{"question": "What is X?", "options": ["A", "B", "C", "D"], "correct": 1}}]
 
@@ -520,7 +531,7 @@ Text:
                     st.session_state.saved_quizzes.append({
                         "questions": st.session_state.quiz_questions,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "book": st.session_state.current_filename
+                        "book": st.session_state.active_book
                     })
                     save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                     st.toast("Quiz saved!", icon="✅")
@@ -630,15 +641,15 @@ Text:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
         
-        if st.session_state.chunks_metadata:
-            pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
+        if chunks_metadata:
+            pages = sorted(set([page for _, page in chunks_metadata]))
             min_page = min(pages) if pages else 1
             max_page = max(pages) if pages else 1
             page_range = st.slider("Select page range from the book", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="page_range_slider")
             
             if st.button("Summarize selected pages", key="summarize_pages"):
                 selected_text = []
-                for text, page in st.session_state.chunks_metadata:
+                for text, page in chunks_metadata:
                     if page_range[0] <= page <= page_range[1]:
                         selected_text.append(text)
                 if selected_text:
@@ -708,20 +719,20 @@ Text:
                 save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                 st.toast("Summary saved!", icon="✅")
 
-    # ---------- TAB 8: Study Aids (fixed) ----------
+    # ---------- TAB 8: Study Aids ----------
     with tabs[7]:
         st.header("Generate Study Aids")
         st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter.")
         
-        if st.session_state.chunks_metadata:
-            pages = sorted(set([page for _, page in st.session_state.chunks_metadata]))
+        if chunks_metadata:
+            pages = sorted(set([page for _, page in chunks_metadata]))
             min_page = min(pages) if pages else 1
             max_page = max(pages) if pages else 1
             study_range = st.slider("Select page range for study aids", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="study_range")
             
             if st.button("Generate Study Aids", key="gen_study"):
                 selected_text = []
-                for text, page in st.session_state.chunks_metadata:
+                for text, page in chunks_metadata:
                     if study_range[0] <= page <= study_range[1]:
                         selected_text.append(text)
                 if selected_text:
@@ -796,4 +807,4 @@ Text:
             st.info("No saved quizzes yet.")
 
 else:
-    st.info("👈 Upload a PDF to start.")
+    st.info("👈 Upload a PDF to start, or select an existing book from the sidebar.")
