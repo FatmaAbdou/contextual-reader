@@ -738,70 +738,105 @@ Text:
                 save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                 st.toast("Summary saved!", icon="✅")
 
-    # ---------- TAB 8: Study Aids (fixed) ----------
-    with tabs[7]:
-        st.header("Generate Study Aids")
-        st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter.")
+ # ---------- TAB 8: Study Aids (enhanced) ----------
+with tabs[7]:
+    st.header("Generate Study Aids")
+    st.markdown("Create a comprehensive study guide from a textbook chapter: summary, key terms, main ideas, discussion questions, and a quick quiz.")
 
-        if chunks_metadata:
-            pages = sorted(set([page for _, page in chunks_metadata]))
-            min_page = min(pages) if pages else 1
-            max_page = max(pages) if pages else 1
-            study_range = st.slider("Select page range for study aids", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="study_range")
+    if chunks_metadata:
+        pages = sorted(set([page for _, page in chunks_metadata]))
+        min_page = min(pages) if pages else 1
+        max_page = max(pages) if pages else 1
+        study_range = st.slider("Select page range for study aids", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="study_range")
 
-            if st.button("Generate Study Aids", key="gen_study"):
-                selected_text = []
-                for text, page in chunks_metadata:
-                    if study_range[0] <= page <= study_range[1]:
-                        selected_text.append(text)
-                if selected_text:
-                    study_text = "\n\n".join(selected_text)[:8000]
-                    with st.spinner("Generating summary and slides..."):
-                        try:
-                            prompt = f"Summarize the following text in 5 bullet points suitable for a PowerPoint slide:\n\n{study_text}"
-                            response = llm.invoke(prompt)
-                            summary_text = response.content
-                            st.session_state.current_study_summary = summary_text
-                            st.session_state.current_study_original = study_text[:200] + "..."
-                            st.session_state.current_study_source = f"Pages {study_range[0]}-{study_range[1]}"
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"API error: {e}. Please try again later.")
-                else:
-                    st.warning("No text in that page range.")
+        if st.button("Generate Study Aids", key="gen_study"):
+            selected_text = []
+            for text, page in chunks_metadata:
+                if study_range[0] <= page <= study_range[1]:
+                    selected_text.append(text)
+            if selected_text:
+                study_text = "\n\n".join(selected_text)[:8000]
+                with st.spinner("Generating study guide..."):
+                    try:
+                        prompt = f"""You are an expert study guide creator. Based on the following textbook chapter, generate a comprehensive study aid with these sections:
 
-            if st.session_state.current_study_summary:
-                st.subheader("Chapter Summary")
-                st.success(st.session_state.current_study_summary)
+1. **Chapter Summary** (2-3 paragraphs)
+2. **Key Terms and Definitions** (list 5-8 important terms with brief definitions)
+3. **Main Takeaways** (5 bullet points of the most important concepts)
+4. **Discussion Questions** (3 thought-provoking questions for review)
+5. **Quick Review Quiz** (3 multiple-choice questions, each with 4 options and the correct answer indicated)
 
-                # Create PPT and PDF from the stored summary
-                try:
-                    ppt_filename = create_ppt(st.session_state.current_study_summary, "study_aids.pptx")
-                    with open(ppt_filename, "rb") as f:
-                        st.download_button("Download PowerPoint (.pptx)", f, "study_aids.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
-                    os.remove(ppt_filename)
-                except Exception as e:
-                    st.error(f"PPT generation error: {e}")
+Format the output clearly with headings and bullet points.
 
-                try:
-                    pdf_buffer = create_pdf(st.session_state.current_study_summary, "summary.pdf")
-                    st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
-                except Exception as e:
-                    st.error(f"PDF generation error: {e}")
+Text:
+{study_text}
 
-                if st.button("💾 Save this summary to my saved summaries", key="save_study_summary"):
-                    st.session_state.saved_summaries.append({
-                        "original": st.session_state.current_study_original,
-                        "summary": st.session_state.current_study_summary,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "source": st.session_state.current_study_source
-                    })
-                    save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
-                    st.toast("Summary saved!", icon="✅")
+Study Guide:"""
+                        response = llm.invoke(prompt)
+                        study_guide = response.content
+                        
+                        # Store in session state for saving and export
+                        st.session_state.current_study_summary = study_guide
+                        st.session_state.current_study_original = study_text[:200] + "..."
+                        st.session_state.current_study_source = f"Pages {study_range[0]}-{study_range[1]}"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"API error: {e}. Please try again later.")
             else:
-                st.info("Select a page range and click 'Generate Study Aids' to get a summary.")
+                st.warning("No text in that page range.")
+
+        if st.session_state.current_study_summary:
+            st.subheader("📖 Study Guide")
+            st.markdown(st.session_state.current_study_summary)
+            
+            # Create PPT and PDF from the study guide
+            try:
+                # For PPT, we'll create a few slides based on sections
+                prs = Presentation()
+                # Split the study guide into sections using headings
+                sections = st.session_state.current_study_summary.split('**')
+                # Simple: just create one slide with the full study guide? Better to split.
+                # But PPT generation is limited; we'll create a few slides.
+                slide_layout = prs.slide_layouts[1]
+                # Slide 1: Title
+                title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+                title = title_slide.shapes.title
+                subtitle = title_slide.placeholders[1]
+                title.text = "Study Guide"
+                subtitle.text = st.session_state.current_study_source
+                # Slide 2: Summary
+                slide = prs.slides.add_slide(slide_layout)
+                slide.shapes.title.text = "Chapter Summary"
+                content = slide.placeholders[1]
+                # Extract summary (first 500 chars)
+                summary_text = st.session_state.current_study_summary
+                content.text = summary_text[:800]
+                prs.save("study_guide.pptx")
+                with open("study_guide.pptx", "rb") as f:
+                    st.download_button("Download PowerPoint (.pptx)", f, "study_guide.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+                os.remove("study_guide.pptx")
+            except Exception as e:
+                st.error(f"PPT generation error: {e}")
+            
+            try:
+                pdf_buffer = create_pdf(st.session_state.current_study_summary, "study_guide.pdf")
+                st.download_button("Download PDF Study Guide", pdf_buffer, "study_guide.pdf", "application/pdf")
+            except Exception as e:
+                st.error(f"PDF generation error: {e}")
+            
+            if st.button("💾 Save this study guide to my saved summaries", key="save_study_summary"):
+                st.session_state.saved_summaries.append({
+                    "original": st.session_state.current_study_original,
+                    "summary": st.session_state.current_study_summary,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "source": st.session_state.current_study_source
+                })
+                save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
+                st.toast("Study guide saved!", icon="✅")
         else:
-            st.info("No book loaded. Upload a PDF to generate study aids.")
+            st.info("Select a page range and click 'Generate Study Aids' to get a comprehensive study guide.")
+    else:
+        st.info("No book loaded. Upload a PDF to generate study aids.")
 
     # ---------- TAB 9: Saved Summaries & Quizzes ----------
     with tabs[8]:
