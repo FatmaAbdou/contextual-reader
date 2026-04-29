@@ -222,8 +222,14 @@ if "current_summary_source" not in st.session_state:
     st.session_state.current_summary_source = None
 if "current_summary_original" not in st.session_state:
     st.session_state.current_summary_original = None
-if "word_definitions" not in st.session_state:   # <-- ADD THIS LINE
+if "word_definitions" not in st.session_state:   # FIX: added missing initialization
     st.session_state.word_definitions = {}
+if "current_study_summary" not in st.session_state:
+    st.session_state.current_study_summary = None
+if "current_study_original" not in st.session_state:
+    st.session_state.current_study_original = None
+if "current_study_source" not in st.session_state:
+    st.session_state.current_study_source = None
 
 # Load persisted summaries and quizzes
 saved_summaries, saved_quizzes = load_saved_data()
@@ -246,7 +252,7 @@ with st.sidebar:
         if selected_book != st.session_state.active_book:
             st.session_state.active_book = selected_book
             st.rerun()
-    
+
     # Import library
     uploaded_lib = st.file_uploader("📥 Import library (JSON)", type="json", key="lib_uploader")
     if uploaded_lib and not st.session_state.imported:
@@ -263,7 +269,7 @@ with st.sidebar:
             st.error(f"Invalid JSON file: {e}")
     if not uploaded_lib and st.session_state.imported:
         st.session_state.imported = False
-    
+
     if st.button("📤 Export library (JSON)"):
         lib = load_library()
         if lib:
@@ -272,7 +278,7 @@ with st.sidebar:
         else:
             st.info("No library to export.")
     st.caption("ℹ️ Library JSON stores only metadata (titles, progress, covers). To keep your RAG state, you must re-upload the PDF after import.")
-    
+
     st.markdown("---")
     if st.button("🗑️ Clear current book"):
         if st.session_state.active_book and st.session_state.active_book in st.session_state.books:
@@ -282,7 +288,7 @@ with st.sidebar:
             else:
                 st.session_state.active_book = None
             st.rerun()
-    
+
     if st.button("🗑️ Clear entire library"):
         save_library([])
         st.success("All books removed from library.")
@@ -319,6 +325,7 @@ if uploaded_file is not None:
 
             # Word statistics
             words = re.findall(r'\b[a-zA-Z]{2,}\b', full_text.lower())
+            words = [w for w in words if len(w) >= 2 and w.isalpha()]
             unique_words = set(words)
             sentences = nltk.sent_tokenize(full_text)
             avg_sentence_len = np.mean([len(w.split()) for w in sentences]) if sentences else 0
@@ -378,7 +385,7 @@ if st.session_state.active_book is not None and st.session_state.active_book in 
         st.header(f"Ask about '{st.session_state.active_book}' (literary critique)")
         question = st.text_input("Your question:", placeholder="e.g., What is your opinion of Mr. Darcy?", key="ask_input")
         ask_button = st.button("Ask", key="ask_submit")
-        
+
         if ask_button and question:
             with st.spinner("Thinking..."):
                 try:
@@ -403,8 +410,8 @@ Answer:"""
                         st.session_state.last_question = question
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error: {e}")
-        
+                    st.error(f"API error: {e}. Please try again later.")
+
         if st.session_state.last_answer:
             st.success(st.session_state.last_answer)
             if st.button("💾 Save this Q&A"):
@@ -526,7 +533,7 @@ Text:
                             else:
                                 st.error("Could not parse quiz. Try again.")
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"API error: {e}. Please try again later.")
         with col2:
             if st.session_state.quiz_questions:
                 if st.button("💾 Save this quiz"):
@@ -570,7 +577,7 @@ Text:
             finished = sum(1 for b in library if b.get("status") == "finished")
             reading = sum(1 for b in library if b.get("status") == "reading")
             rate = (finished / total_books * 100) if total_books else 0
-            
+
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("📚 Total books", total_books)
             c2.metric("📝 Total words", f"{total_words:,}")
@@ -578,7 +585,7 @@ Text:
             c4.metric("📖 Reading now", reading)
             st.progress(rate/100, text=f"Completion: {rate:.1f}%")
             st.markdown("---")
-            
+
             sort_by = st.selectbox("Sort by", ["Upload date (newest first)", "Word count", "Title", "Status", "Progress"])
             if sort_by == "Upload date (newest first)":
                 library.sort(key=lambda x: x.get("upload_date", ""), reverse=True)
@@ -590,7 +597,7 @@ Text:
                 library.sort(key=lambda x: x.get("status", ""))
             elif sort_by == "Progress":
                 library.sort(key=lambda x: x.get("progress", 0), reverse=True)
-            
+
             for idx, book in enumerate(library):
                 with st.container():
                     cols = st.columns([1, 2, 2, 1, 1])
@@ -642,13 +649,13 @@ Text:
     with tabs[6]:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
-        
+
         if chunks_metadata:
             pages = sorted(set([page for _, page in chunks_metadata]))
             min_page = min(pages) if pages else 1
             max_page = max(pages) if pages else 1
             page_range = st.slider("Select page range from the book", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="page_range_slider")
-            
+
             if st.button("Summarize selected pages", key="summarize_pages"):
                 selected_text = []
                 for text, page in chunks_metadata:
@@ -661,17 +668,22 @@ Text:
                         summary = st.session_state.summary_cache[hash_key]
                     else:
                         with st.spinner("Generating summary..."):
-                            prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
-                            response = llm.invoke(prompt)
-                            summary = response.content
-                            st.session_state.summary_cache[hash_key] = summary
-                    st.session_state.current_summary = summary
-                    st.session_state.current_summary_source = f"Pages {page_range[0]}-{page_range[1]}"
-                    st.session_state.current_summary_original = text_to_sum[:200] + "..."
-                    st.rerun()
+                            try:
+                                prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
+                                response = llm.invoke(prompt)
+                                summary = response.content
+                                st.session_state.summary_cache[hash_key] = summary
+                            except Exception as e:
+                                st.error(f"API error: {e}")
+                                summary = None
+                    if summary:
+                        st.session_state.current_summary = summary
+                        st.session_state.current_summary_source = f"Pages {page_range[0]}-{page_range[1]}"
+                        st.session_state.current_summary_original = text_to_sum[:200] + "..."
+                        st.rerun()
                 else:
                     st.warning("No text in that page range.")
-            
+
             if st.session_state.current_summary and st.session_state.current_summary_source.startswith("Pages"):
                 st.success(st.session_state.current_summary)
                 if st.button("💾 Save this summary", key="save_summary_pages"):
@@ -685,11 +697,11 @@ Text:
                     st.toast("Summary saved!", icon="✅")
         else:
             st.info("No book loaded. Upload a PDF to summarize its pages.")
-        
+
         st.markdown("---")
         st.subheader("Or paste your own text")
         manual_text = st.text_area("Paste text to summarize", height=200, key="custom_summary_text")
-        
+
         if st.button("Summarize custom text", key="summarize_custom"):
             if manual_text:
                 text_to_sum = manual_text[:8000]
@@ -698,17 +710,22 @@ Text:
                     summary = st.session_state.summary_cache[hash_key]
                 else:
                     with st.spinner("Generating summary..."):
-                        prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
-                        response = llm.invoke(prompt)
-                        summary = response.content
-                        st.session_state.summary_cache[hash_key] = summary
-                st.session_state.current_summary = summary
-                st.session_state.current_summary_source = "Custom text"
-                st.session_state.current_summary_original = manual_text[:200] + "..."
-                st.rerun()
+                        try:
+                            prompt = f"Summarize the following text concisely:\n\n{text_to_sum}"
+                            response = llm.invoke(prompt)
+                            summary = response.content
+                            st.session_state.summary_cache[hash_key] = summary
+                        except Exception as e:
+                            st.error(f"API error: {e}")
+                            summary = None
+                if summary:
+                    st.session_state.current_summary = summary
+                    st.session_state.current_summary_source = "Custom text"
+                    st.session_state.current_summary_original = manual_text[:200] + "..."
+                    st.rerun()
             else:
                 st.warning("Please enter some text.")
-        
+
         if st.session_state.current_summary and st.session_state.current_summary_source == "Custom text":
             st.success(st.session_state.current_summary)
             if st.button("💾 Save this summary", key="save_summary_custom"):
@@ -721,17 +738,17 @@ Text:
                 save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
                 st.toast("Summary saved!", icon="✅")
 
-    # ---------- TAB 8: Study Aids ----------
+    # ---------- TAB 8: Study Aids (fixed) ----------
     with tabs[7]:
         st.header("Generate Study Aids")
         st.markdown("Create a PowerPoint summary and a PDF handout from a textbook chapter.")
-        
+
         if chunks_metadata:
             pages = sorted(set([page for _, page in chunks_metadata]))
             min_page = min(pages) if pages else 1
             max_page = max(pages) if pages else 1
             study_range = st.slider("Select page range for study aids", min_value=min_page, max_value=max_page, value=(min_page, min(min_page+10, max_page)), key="study_range")
-            
+
             if st.button("Generate Study Aids", key="gen_study"):
                 selected_text = []
                 for text, page in chunks_metadata:
@@ -740,46 +757,56 @@ Text:
                 if selected_text:
                     study_text = "\n\n".join(selected_text)[:8000]
                     with st.spinner("Generating summary and slides..."):
-                        prompt = f"Summarize the following text in 5 bullet points suitable for a PowerPoint slide:\n\n{study_text}"
-                        response = llm.invoke(prompt)
-                        summary_text = response.content
-                        st.subheader("Chapter Summary")
-                        st.write(summary_text)
-                        
-                        # Create PPT
                         try:
-                            ppt_filename = create_ppt(summary_text, "study_aids.pptx")
-                            with open(ppt_filename, "rb") as f:
-                                st.download_button("Download PowerPoint (.pptx)", f, "study_aids.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
-                            os.remove(ppt_filename)
+                            prompt = f"Summarize the following text in 5 bullet points suitable for a PowerPoint slide:\n\n{study_text}"
+                            response = llm.invoke(prompt)
+                            summary_text = response.content
+                            st.session_state.current_study_summary = summary_text
+                            st.session_state.current_study_original = study_text[:200] + "..."
+                            st.session_state.current_study_source = f"Pages {study_range[0]}-{study_range[1]}"
+                            st.rerun()
                         except Exception as e:
-                            st.error(f"PPT generation error: {e}")
-                        
-                        # Create PDF
-                        try:
-                            pdf_buffer = create_pdf(summary_text, "summary.pdf")
-                            st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
-                        except Exception as e:
-                            st.error(f"PDF generation error: {e}")
-                        
-                        if st.button("💾 Save this summary to my saved summaries", key="save_study_summary"):
-                            st.session_state.saved_summaries.append({
-                                "original": study_text[:200]+"...",
-                                "summary": summary_text,
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "source": "Study aids generation"
-                            })
-                            save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
-                            st.toast("Saved!")
+                            st.error(f"API error: {e}. Please try again later.")
                 else:
                     st.warning("No text in that page range.")
+
+            if st.session_state.current_study_summary:
+                st.subheader("Chapter Summary")
+                st.success(st.session_state.current_study_summary)
+
+                # Create PPT and PDF from the stored summary
+                try:
+                    ppt_filename = create_ppt(st.session_state.current_study_summary, "study_aids.pptx")
+                    with open(ppt_filename, "rb") as f:
+                        st.download_button("Download PowerPoint (.pptx)", f, "study_aids.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+                    os.remove(ppt_filename)
+                except Exception as e:
+                    st.error(f"PPT generation error: {e}")
+
+                try:
+                    pdf_buffer = create_pdf(st.session_state.current_study_summary, "summary.pdf")
+                    st.download_button("Download PDF Summary", pdf_buffer, "chapter_summary.pdf", "application/pdf")
+                except Exception as e:
+                    st.error(f"PDF generation error: {e}")
+
+                if st.button("💾 Save this summary to my saved summaries", key="save_study_summary"):
+                    st.session_state.saved_summaries.append({
+                        "original": st.session_state.current_study_original,
+                        "summary": st.session_state.current_study_summary,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "source": st.session_state.current_study_source
+                    })
+                    save_saved_data(st.session_state.saved_summaries, st.session_state.saved_quizzes)
+                    st.toast("Summary saved!", icon="✅")
+            else:
+                st.info("Select a page range and click 'Generate Study Aids' to get a summary.")
         else:
             st.info("No book loaded. Upload a PDF to generate study aids.")
 
     # ---------- TAB 9: Saved Summaries & Quizzes ----------
     with tabs[8]:
         st.header("Saved Summaries & Quizzes")
-        
+
         st.subheader("📝 Saved Summaries")
         if st.session_state.saved_summaries:
             for i, s in enumerate(st.session_state.saved_summaries):
@@ -791,7 +818,7 @@ Text:
                 st.download_button("Download", json_str, "saved_summaries.json", "application/json")
         else:
             st.info("No saved summaries yet.")
-        
+
         st.markdown("---")
         st.subheader("📋 Saved Quizzes")
         if st.session_state.saved_quizzes:
