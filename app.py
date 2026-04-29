@@ -738,6 +738,7 @@ Text:
                 st.toast("Summary saved!", icon="✅")
 
       # ---------- TAB 8: Study Aids (enhanced PPT with multiple slides) ----------
+        # ---------- TAB 8: Study Aids (enhanced PPT with multiple slides) ----------
     with tabs[7]:
         st.header("Generate Study Aids")
         st.markdown("Create a comprehensive study guide from a textbook chapter: summary, key terms, main ideas, discussion questions, and a quick quiz.")
@@ -789,46 +790,35 @@ Study Guide:"""
 
                 # --- Enhanced PPT with multiple slides ---
                 try:
-                    # Create a new presentation
                     prs = Presentation()
-                    
-                    # Title slide
                     title_slide_layout = prs.slide_layouts[0]
                     slide = prs.slides.add_slide(title_slide_layout)
                     title = slide.shapes.title
                     subtitle = slide.placeholders[1]
                     title.text = "Study Guide"
                     subtitle.text = st.session_state.current_study_source
-                    
-                    # Parse the study guide into sections
+
                     lines = st.session_state.current_study_summary.split('\n')
                     current_section = ""
                     current_content = []
                     sections = []
-                    
-                    # Simple parser: detect headings like "**Chapter Summary**" or "1. **Chapter Summary**"
+
                     for line in lines:
                         line_clean = line.strip()
-                        # Check if line looks like a heading
                         if ('**' in line_clean and line_clean.endswith('**')) or (line_clean.startswith('1.') or line_clean.startswith('2.') or line_clean.startswith('3.') or line_clean.startswith('4.') or line_clean.startswith('5.')):
-                            # Save previous section
                             if current_section and current_content:
                                 sections.append((current_section.strip('*').strip('0123456789. '), '\n'.join(current_content)))
-                            # Start new section
                             current_section = line_clean
                             current_content = []
                         else:
                             if line_clean:
                                 current_content.append(line_clean)
-                    # Add last section
                     if current_section and current_content:
                         sections.append((current_section.strip('*').strip('0123456789. '), '\n'.join(current_content)))
-                    
-                    # Create a content slide for each section
+
                     for section_title, section_text in sections:
                         slide_title = section_title[:60]
                         if len(section_text) > 1500:
-                            # Split very long sections
                             chunks = [section_text[i:i+1500] for i in range(0, len(section_text), 1500)]
                             for idx, chunk in enumerate(chunks):
                                 slide_layout = prs.slide_layouts[1]
@@ -842,8 +832,7 @@ Study Guide:"""
                             slide.shapes.title.text = slide_title
                             content = slide.placeholders[1]
                             content.text = section_text
-                    
-                    # Save and offer download
+
                     prs.save("study_guide.pptx")
                     with open("study_guide.pptx", "rb") as f:
                         st.download_button("Download PowerPoint (.pptx)", f, "study_guide.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
@@ -851,7 +840,6 @@ Study Guide:"""
                 except Exception as e:
                     st.error(f"PPT generation error: {e}")
 
-                # --- PDF generation (simple, can be improved later) ---
                 try:
                     pdf_buffer = create_pdf(st.session_state.current_study_summary, "study_guide.pdf")
                     st.download_button("Download PDF Study Guide", pdf_buffer, "study_guide.pdf", "application/pdf")
@@ -872,6 +860,46 @@ Study Guide:"""
         else:
             st.info("No book loaded. Upload a PDF to generate study aids.")
 
+    # ---------- TAB 9: Saved Summaries & Quizzes (with manual refresh) ----------
+    with tabs[8]:
+        st.header("Saved Summaries & Quizzes")
+
+        if st.button("🔄 Refresh saved data"):
+            summaries, quizzes = load_saved_data()
+            st.session_state.saved_summaries = summaries
+            st.session_state.saved_quizzes = quizzes
+            st.rerun()
+
+        st.subheader("📝 Saved Summaries")
+        if st.session_state.saved_summaries:
+            for i, s in enumerate(st.session_state.saved_summaries):
+                with st.expander(f"Summary {i+1} - {s['timestamp']} (Source: {s['source']})"):
+                    st.caption(f"Original excerpt: {s['original']}")
+                    st.write(f"**Summary:** {s['summary']}")
+            if st.button("Export all summaries as JSON"):
+                json_str = json.dumps(st.session_state.saved_summaries, indent=2)
+                st.download_button("Download", json_str, "saved_summaries.json", "application/json")
+        else:
+            st.info("No saved summaries yet. Generate and save a summary from the Summarize tab.")
+
+        st.markdown("---")
+        st.subheader("📋 Saved Quizzes")
+        if st.session_state.saved_quizzes:
+            for i, qz in enumerate(st.session_state.saved_quizzes):
+                with st.expander(f"Quiz {i+1} - {qz['timestamp']} (Book: {qz['book']})"):
+                    for j, q in enumerate(qz['questions']):
+                        st.write(f"**Q{j+1}:** {q['question']}")
+                        for opt in q['options']:
+                            st.write(f"  - {opt}")
+                        st.write(f"*Correct answer:* {q['options'][q['correct']]}")
+            if st.button("Export all quizzes as JSON"):
+                json_str = json.dumps(st.session_state.saved_quizzes, indent=2)
+                st.download_button("Download", json_str, "saved_quizzes.json", "application/json")
+        else:
+            st.info("No saved quizzes yet. Generate and save a quiz from the Quiz tab.")
+
+else:
+    st.info("👈 Upload a PDF to start, or select an existing book from the sidebar.")
     # ---------- TAB 9: Saved Summaries & Quizzes (with manual refresh) ----------
 with tabs[8]:
     st.header("Saved Summaries & Quizzes")
