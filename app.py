@@ -191,7 +191,7 @@ class SimpleVectorStore:
 
 # ---------- Session state (multi‑book) ----------
 if "books" not in st.session_state:
-    st.session_state.books = {}   # key = filename, value = dict with vectorstore, full_text, stats, chunks_metadata, rare_words
+    st.session_state.books = {}
 if "active_book" not in st.session_state:
     st.session_state.active_book = None
 if "saved_qa" not in st.session_state:
@@ -222,6 +222,8 @@ if "current_summary_source" not in st.session_state:
     st.session_state.current_summary_source = None
 if "current_summary_original" not in st.session_state:
     st.session_state.current_summary_original = None
+if "word_definitions" not in st.session_state:   # <-- ADD THIS LINE
+    st.session_state.word_definitions = {}
 
 # Load persisted summaries and quizzes
 saved_summaries, saved_quizzes = load_saved_data()
