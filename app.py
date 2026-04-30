@@ -26,6 +26,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import simpleSplit
 
 # Download NLTK lemmatizer
+#Downloads the WordNet lemmatizer once and caches it (@st.cache_resource so it isn’t downloaded again on every rerun).
+#The lemmatizer converts words to base form (e.g., “running” → “run”) to improve dictionary lookups.  
+
 @st.cache_resource
 def download_nltk_lemmatizer():
     nltk.download('wordnet', quiet=True)
@@ -37,12 +40,14 @@ lemmatizer = download_nltk_lemmatizer()
 st.set_page_config(page_title="Contextual Reader", page_icon="📚", layout="wide")
 
 # ---------- Helper functions ----------
+#Tries to get the key from Streamlit secrets (cloud), falls back to .env (local).
 def get_api_key():
     try:
         return st.secrets["GOOGLE_API_KEY"]
     except:
         return os.getenv("GOOGLE_API_KEY")
-
+    
+#Downloads sentence tokeniser and stopwords, then caches them. Returns the list of English stopwords.
 @st.cache_resource
 def load_nltk_data():
     nltk.download('punkt', quiet=True)
@@ -53,11 +58,15 @@ def load_nltk_data():
 
 stop_words = load_nltk_data()
 
+#Creates a HuggingFace embedding model instance. Cached so it’s only loaded once.
 @st.cache_resource
 def get_embeddings():
     return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # ---------- Library persistence ----------
+#book_library.json stores metadata for all books ever uploaded (filename, upload date, word count, stats, cover (base64 or URL), status, progress).
+#Functions read/write this file. No vector data is saved – only metadata.
+
 LIBRARY_FILE = "book_library.json"
 
 def load_library():
@@ -114,6 +123,9 @@ def delete_book_from_library(filename):
     save_library(library)
 
 # ---------- Saved summaries & quizzes persistence ----------
+#saved_data.json stores two lists: summaries and quizzes. Each summary contains original excerpt, summary text, timestamp, source. Each quiz contains list of question objects, timestamp, book name.
+#Loaded at startup, saved whenever a new summary or quiz is added.
+
 SAVED_DATA_FILE = "saved_data.json"
 
 def load_saved_data():
@@ -128,6 +140,8 @@ def save_saved_data(summaries, quizzes):
         json.dump({"summaries": summaries, "quizzes": quizzes}, f, indent=2)
 
 # ---------- Definition lookup ----------
+#Uses lemmatised and original form to query Free Dictionary API. Returns definition or None if not found.
+
 def get_definition(word):
     base_word = lemmatizer.lemmatize(word.lower())
     for attempt in [word.lower(), base_word]:
@@ -143,6 +157,9 @@ def get_definition(word):
     return None
 
 # ---------- Study aids (PPT + PDF) ----------
+#create_ppt makes a simple one‑slide PowerPoint with title and content.
+#create_pdf writes text to a page, wrapping long lines with simpleSplit. Returns an in‑memory buffer for download.
+
 def create_ppt(summary_text, filename="study_aids.pptx"):
     prs = Presentation()
     slide_layout = prs.slide_layouts[1]
@@ -171,6 +188,11 @@ def create_pdf(text, filename="study_guide.pdf"):
     return buffer
 
 # ---------- Vector store ----------
+#__init__ – stores the embedding model, initialises empty list for chunks and empty NumPy array for embeddings.
+#add_documents – takes LangChain Document chunks, embeds them, stores embeddings as a 2D array.
+#similarity_search – embeds the query, computes cosine similarity between query vector and all stored vectors, returns top k(12) chunks. Cosine similarity formula is (A·B)/(||A||·||B||).
+
+
 class SimpleVectorStore:
     def __init__(self, embeddings_model):
         self.embeddings_model = embeddings_model
@@ -189,6 +211,10 @@ class SimpleVectorStore:
         return [self.chunks[i] for i in idx]
 
 # ---------- Session state (multi‑book) ----------
+#st.session_state persists data across Streamlit reruns.
+#books is a dictionary: key = filename, value = dict with vectorstore, full_text, chunks_metadata, stats, rare_words.
+#Other state variables hold saved Q&A, summaries, quizzes, current question/answer, etc.
+
 if "books" not in st.session_state:
     st.session_state.books = {}
 if "active_book" not in st.session_state:
@@ -231,6 +257,8 @@ if "current_study_source" not in st.session_state:
     st.session_state.current_study_source = None
 
 # Load persisted summaries and quizzes
+#Restores previously saved summaries and quizzes from JSON file into session state.
+
 saved_summaries, saved_quizzes = load_saved_data()
 if saved_summaries:
     st.session_state.saved_summaries = saved_summaries
@@ -238,6 +266,12 @@ if saved_quizzes:
     st.session_state.saved_quizzes = saved_quizzes
 
 # ---------- Sidebar (always visible) ----------
+# Displays active book dropdown (if >1 book loaded).
+#Import library JSON (overwrites existing).
+#Export library JSON.
+#Clear current book (removes from st.session_state.books but not from library JSON).
+#Clear entire library (wipes book_library.json).
+
 with st.sidebar:
     st.markdown("## 📖 Contextual Reader")
     st.markdown("---")
@@ -294,6 +328,11 @@ with st.sidebar:
         st.rerun()
 
 # ---------- Main area ----------
+#If file is new, load PDF, split into chunks, compute embeddings, build vector store.
+#Also compute word statistics and rare words using NLTK and regex.
+#Store everything in st.session_state.books[filename].
+#Add metadata to library JSON (without vector data).
+
 st.title("📚 Contextual Reader")
 st.markdown("*Your personal AI reading companion*")
 
@@ -363,6 +402,10 @@ if uploaded_file is not None:
         st.info(f"📚 '{filename}' is already loaded. Select it from the sidebar to ask questions.")
 
 # ---------- Tabs (only when a book is active) ----------
+#Retrieves the active book’s data.
+#Initialises Gemini (temperature=0.7 for creative literary critique).
+#Creates 9 tabs.
+
 if st.session_state.active_book is not None and st.session_state.active_book in st.session_state.books:
     book_data = st.session_state.books[st.session_state.active_book]
     vectorstore = book_data["vectorstore"]
@@ -380,6 +423,12 @@ if st.session_state.active_book is not None and st.session_state.active_book in 
     tabs = st.tabs(["💬 Ask", "📊 Dashboard", "📌 Saved Q&A", "📖 Vocabulary", "🧠 Quiz", "📚 Library", "✍️ Summarize", "📑 Study Aids", "💾 Saved Summaries & Quizzes"])
 
     # ---------- TAB 1: Ask ----------
+    #Takes user question.
+    #Performs vectorstore.similarity_search(question, k=12) to get relevant chunks.
+    #Builds a prompt with those chunks.
+    #Calls llm.invoke(prompt) to get answer.
+    #Displays answer and “Source passages” expander.
+    #Save button appends to st.session_state.saved_qa.
     with tabs[0]:
         st.header(f"Ask about '{st.session_state.active_book}' (literary critique)")
         question = st.text_input("Your question:", placeholder="e.g., What is your opinion of Mr. Darcy?", key="ask_input")
@@ -425,6 +474,11 @@ Answer:"""
                     st.caption(f"Source {i+1}: {d.page_content[:500]}...")
 
     # ---------- TAB 2: Dashboard ----------
+    #Shows word count, unique words, sentences, reading time from book_stats.
+    #Asks user for character names (comma separated).
+    #Uses regex \b to count occurrences in full text.
+    #Plots bar chart with Plotly.
+   
     with tabs[1]:
         st.header(f"Dashboard: {st.session_state.active_book}")
         if book_stats:
@@ -450,6 +504,9 @@ Answer:"""
             st.info("No stats available.")
 
     # ---------- TAB 3: Saved Q&A ----------
+    #Displays list of saved Q&A as Pandas DataFrame.
+    #Button to download as CSV.
+    
     with tabs[2]:
         st.header("Saved Q&A")
         if st.session_state.saved_qa:
@@ -461,6 +518,11 @@ Answer:"""
             st.info("No saved Q&A yet.")
 
     # ---------- TAB 4: Vocabulary ----------
+    #Shows rare words from the current book (frequency 1‑3, not stopwords, length ≥3).
+    #Click a word to fetch definition using get_definition().
+    #Look up any custom word.
+    #Export CSV with definitions.
+    
     with tabs[3]:
         st.header("Vocabulary Builder")
         if rare_words:
@@ -502,6 +564,13 @@ Answer:"""
             st.download_button("Download CSV", csv, "vocabulary.csv", "text/csv")
 
     # ---------- TAB 5: Quiz ----------
+    #Randomly selects 20 chunks from vector store.
+    #Prompts Gemini to return JSON array of 5 multiple‑choice questions
+    #Parses JSON from response (output parser).
+    #Shows questions in a st.form with radio buttons.
+    #On submit, computes score.
+    #Save button appends quiz to st.session_state.saved_quizzes and calls save_saved_data().
+    
     with tabs[4]:
         st.header("AI‑Generated Quiz")
         col1, col2 = st.columns([2,1])
@@ -565,6 +634,11 @@ Text:
             st.info("Click 'Generate new quiz' to start.")
 
     # ---------- TAB 6: Library ----------
+    #Loads metadata from book_library.json.
+    #Displays book covers (base64 or URL), filename, upload date, word count.
+    #Allows updating cover, status, progress.
+    #Delete book from library (JSON only, not from memory).
+    
     with tabs[5]:
         st.header("📚 Your Library")
         library = load_library()
@@ -645,6 +719,12 @@ Text:
                     st.divider()
 
     # ---------- TAB 7: Summarize ----------
+    #Page range slider uses chunks_metadata to collect text from selected pages.
+    #Sends text to Gemini with “Summarize concisely” prompt.
+    #Caches result using MD5 hash (avoids repeated API calls for same text).
+    #Displays summary and provides save button (adds to saved_summaries).
+    #Also supports custom pasted text.
+    
     with tabs[6]:
         st.header("Summarize Chapters, Paragraphs, or Custom Text")
         st.markdown("**Note:** Summarization calls the Gemini API each time (spinner appears). You can save summaries for later.")
@@ -738,6 +818,14 @@ Text:
                 st.toast("Summary saved!", icon="✅")
 
     # ---------- TAB 8: Study Aids (enhanced PPT with multiple slides) ----------
+    #Similar page range selection.
+    #Prompts Gemini to produce a structured study guide (summary, key terms, takeaways, discussion questions, quick quiz).
+    #Stores guide in session state.
+    #Converts guide into PowerPoint (multi‑slide: title slide + one slide per section) using python-pptx.
+    #Creates PDF using reportlab.
+    #Download buttons for both.
+    #Save button to store in saved_summaries.
+
     with tabs[7]:
         st.header("Generate Study Aids")
         st.markdown("Create a comprehensive study guide from a textbook chapter: summary, key terms, main ideas, discussion questions, and a quick quiz.")
@@ -860,6 +948,10 @@ Study Guide:"""
             st.info("No book loaded. Upload a PDF to generate study aids.")
 
     # ---------- TAB 9: Saved Summaries & Quizzes (with manual refresh) ----------
+    #Displays saved summaries and quizzes from session state (loaded from JSON at startup).
+    #Manual refresh button reloads from disk.
+    #Export buttons to download as JSON.
+
     with tabs[8]:
         st.header("Saved Summaries & Quizzes")
 
@@ -897,5 +989,6 @@ Study Guide:"""
         else:
             st.info("No saved quizzes yet. Generate and save a quiz from the Quiz tab.")
 
+#Shown when no active book is selected.
 else:
     st.info("👈 Upload a PDF to start, or select an existing book from the sidebar.")
